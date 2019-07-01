@@ -54,7 +54,6 @@ class BootstrapEstimator(object):
 
     # TODO: Add a __dir__ implementation?
 
-    # TODO: what if some args can be None?
     def fit(self, *args, **named_args):
         """
         Fit the model.
