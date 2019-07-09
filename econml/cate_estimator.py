@@ -16,7 +16,13 @@ class BaseCateEstimator(metaclass=abc.ABCMeta):
     Base class for all CATE estimators in this package.
     """
 
-    _inference_options = {'bootstrap': BootstrapInference}
+    def _get_inference_options(self):
+        """
+        Produce a dictionary mapping string names to `Inference` types.
+
+        This is used by the `fit` method when a string is passed rather than an `Inference` type.
+        """
+        return {'bootstrap': BootstrapInference}
 
     @abc.abstractmethod
     def fit(self, *args, inference=None, **kwargs):
@@ -46,8 +52,9 @@ class BaseCateEstimator(metaclass=abc.ABCMeta):
         self
 
         """
-        if inference in self._inference_options:
-            inference = self._inference_options[inference]()
+        options = self._get_inference_options()
+        if inference in options:
+            inference = options[inference]()
         if inference is not None:
             inference.fit(self, *args, **kwargs)
         self._inference = inference

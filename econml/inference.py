@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import abc
+import numpy as np
 from .bootstrap import BootstrapEstimator
 
 """Options for performing inference in estimators."""

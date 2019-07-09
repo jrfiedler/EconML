@@ -149,7 +149,7 @@ class _RLearner(LinearCateEstimator):
     def const_marginal_effect_interval(self, X=None, *, alpha=0.1):
         if X is None:
             X = np.ones((1, 1))
-        return super()._const_marginal_effect_interval(X, alpha=alpha)
+        return super().const_marginal_effect_interval(X, alpha=alpha)
 
     # if T is scalar, expand to match number of rows of X
     # if T is a discrete treatment, transform it to one-hot representation
@@ -375,8 +375,11 @@ class LinearDMLCateEstimator(DMLCateEstimator):
         (or an instance of `BootstrapInference`) and 'statsmodels' (or an instance of 'StatsModelsInference`)
     """
 
-    # add statsmodels to parent's options
-    _inference_options = {**DMLCateEstimator._inference_options, 'statsmodels': StatsModelsInference}
+    def _get_inference_options(self):
+        # add statsmodels to parent's options
+        options = super()._get_inference_options()
+        options.update(statsmodels=StatsModelsInference)
+        return options
 
     class StatsModelsWrapper:
         def __init__(self):

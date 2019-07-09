@@ -104,6 +104,14 @@ class TestDML(unittest.TestCase):
         assert (point <= hi).all()
         assert (lo < hi).any()  # for at least some of the examples, the CI should have nonzero width
 
+        interval = dml.marginal_effect_interval(np.ones((9, 1)), alpha=0.05)
+        point = dml.marginal_effect(np.ones((9, 1)))
+        self.assertEqual(interval.shape, (2,) + point.shape)
+        lo, hi = interval
+        assert (lo <= point).all()
+        assert (point <= hi).all()
+        assert (lo < hi).any()  # for at least some of the examples, the CI should have nonzero width
+
     @staticmethod
     def _generate_recoverable_errors(a_X, X, a_W=None, W=None, featurizer=FunctionTransformer()):
         """Return error vectors e_t and e_y such that OLS can recover the true coefficients from both stages."""
