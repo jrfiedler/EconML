@@ -52,6 +52,9 @@ class StatsModelsInference(Inference):
 
     This class can be used for inference by the LinearDMLCateEstimator.
 
+    Any estimator that supports this method of inference must implement a `statsmodelsproperties`
+    property that returns a `StatsModelsProperties` instance.
+
     Parameters
     ----------
     cov_type : string, optional (default 'HC1')
@@ -72,20 +75,46 @@ class StatsModelsInference(Inference):
             raise ValueError("Unsupported cov_type; "
                              "must be one of 'nonrobust', "
                              "'fixed scale', 'HC0', 'HC1', 'HC2', or 'HC3'")
+
         self.cov_type = cov_type
         self.cov_kwds = cov_kwds
 
+    class StatsModelsProperties:
+        """
+        Stores  estimator-specific information a `StatsModelInference` instance needs to calculate effect intervals.
+
+        Parameters
+        ----------
+        wrapper : StatsModelsWrapper
+            The `StatsModelsWrapper` used by the estimator
+        combine : function (from features and treatments to model inputs)
+            Function that combines raw features and treatments to get the inputs
+            to the statsmodels model
+        combine_all : function (from features to model inputs)
+            Function that combines raw features with each unit treatment to get the
+            inputs to the statstmodels model
+        reshape_results : function
+            Function to take outputs ordered by treatment then outcome and permute
+            so that outcome varies more rapidly than treatment (if necessary)
+        """
+
+        def __init__(self, wrapper, combine, combine_all, reshape_results):
+            self.wrapper = wrapper
+            self.combine = combine
+            self.combine_all = combine_all
+            self.reshape_results = reshape_results
+
     def fit(self, estimator, *args, **kwargs):
-        estimator._model_final.fit_args = {'cov_type': self.cov_type, 'cov_kwds': self.cov_kwds}
-        self._est = estimator
+        self.props = estimator.statsmodelsproperties
+        # Set the wrapper's fit arguments to use the desired covariance structure
+        self.props.wrapper.fit_args = {'cov_type': self.cov_type, 'cov_kwds': self.cov_kwds}
 
     def effect_interval(self, X, *, T0=0, T1=1, alpha=0.1):
         dT = T1 - T0
-        preds = self._est._model_final._model.predict_interval(self._est._model_final._combine(X, dT), alpha=alpha)
+        preds = self.props.wrapper.predict_interval(self.props.combine(X, dT), alpha=alpha)
         return preds
 
     def const_marginal_effect_interval(self, X, *, alpha=0.1):
-        # TODO: is there a cleaner way to achieve this?
-        XT = self._est._model_final._transform(X)
-        preds = self._est._model_final._model.predict_interval(XT, alpha=alpha)
-        return np.stack([self._est._model_final._untransform(pred) for pred in preds])
+        XT = self.props.combine_all(X)
+        preds = self.props.wrapper.predict_interval(XT, alpha=alpha)
+        return np.stack([self.props.reshape_results(pred) for pred in preds])

@@ -12,6 +12,7 @@ from collections import defaultdict, Counter
 from sklearn.base import TransformerMixin
 from functools import reduce
 from sklearn.utils import check_array, check_X_y
+from statsmodels.regression.linear_model import OLS
 
 MAX_RAND_SEED = np.iinfo(np.int32).max
 
@@ -697,3 +698,84 @@ class MultiModelWrapper(object):
         t = Xt[:, -self.n_T:]
         predictions = [self.model_list[np.nonzero(t[i])[0][0]].predict(X[[i]]) for i in range(len(X))]
         return np.concatenate(predictions)
+
+
+class StatsModelsWrapper:
+    """
+    Helper class to wrap a StatsModels OLS model to conform to the sklearn API.
+
+    Attributes
+    ----------
+    fit_args: dict of str: object
+        The arguments to pass to the `OLS` regression's `fit` method.  See the
+        statsmodels documentation for more information.
+    results: RegressionResults
+        After `fit` has been called, this attribute will store the regression results.
+    """
+
+    def __init__(self):
+        self.fit_args = {}
+
+    def fit(self, X, y, sample_weight=None):
+        """
+        Fit the ordinary least squares model.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Training data
+        y : array_like, shape (n_samples, 1) or (n_samples,)
+            Target values
+        sample_weight : array_like, shape (n_samples,)
+            Individual weights for each sample
+
+        Returns
+        -------
+        self
+        """
+        assert ndim(y) == 1 or (ndim(y) == 2 and shape(y)[1] == 1)
+        y = reshape(y, (-1,))
+        if sample_weight is not None:
+            ols = OLS(y, X, weights=sample_weight)
+        else:
+            ols = OLS(y, X)
+        self.results = ols.fit(**self.fit_args)
+        return self
+
+    def predict(self, X):
+        """
+        Predict using the model.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Samples.
+
+        Returns
+        -------
+        array, shape (n_samples,)
+            Predicted values
+        """
+        return self.results.predict(X)
+
+    def predict_interval(self, X, alpha):
+        """
+        Get a confidence interval for the prediction at `X`.
+
+        Parameters
+        ----------
+        X : array-like
+            The features at which to predict
+        alpha : float
+            The significance level to use for the interval
+
+        Returns
+        -------
+        array, shape (2, n_samples)
+            Lower and upper bounds for the confidence interval at each sample point
+        """
+        # NOTE: we use `obs = False` to get a confidence, rather than prediction, interval
+        preds = self.results.get_prediction(X).conf_int(alpha=alpha, obs=False)
+        # statsmodels uses the last dimension instead of the first to store the confidence intervals,
+        # so we need to transpose the result
+        return transpose(preds)

@@ -11,14 +11,13 @@ from the treatment residuals.
 
 import numpy as np
 import copy
-from .utilities import shape, reshape, ndim, hstack, cross_product, transpose
+from .utilities import shape, reshape, ndim, hstack, cross_product, transpose, StatsModelsWrapper
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.linear_model import LinearRegression, LassoCV
 from sklearn.preprocessing import PolynomialFeatures, LabelEncoder, OneHotEncoder
 from sklearn.base import clone, TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.utils import check_random_state
-from statsmodels.regression.linear_model import OLS
 from .cate_estimator import LinearCateEstimator
 from .inference import StatsModelsInference
 
@@ -292,7 +291,7 @@ class DMLCateEstimator(_RLearner):
                 return cross_product(self._featurizer.fit_transform(X), T)
 
             # combine X with each marginal treatment
-            def _transform(self, X):
+            def _combine_all(self, X):
                 # create an identity matrix of size d_t (or just a 1-element array if T was a vector)
                 # the nth row will allow us to compute the marginal effect of the nth component of treatment
                 d_x = shape(X)[0]
@@ -303,7 +302,7 @@ class DMLCateEstimator(_RLearner):
                 Xs = np.repeat(X, d_t, axis=0)
                 return self._combine(Xs, T)
 
-            def _untransform(self, A):
+            def _reshape_results(self, A):
                 A = reshape(A, (-1,) + self._d_t + self._d_y)
                 if self._d_t and self._d_y:
                     return transpose(A, (0, 2, 1))  # need to return as m by d_y by d_t matrix
@@ -311,8 +310,8 @@ class DMLCateEstimator(_RLearner):
                     return A
 
             def predict(self, X):
-                XT = self._transform(X)
-                return self._untransform(self._model.predict(XT))
+                XT = self._combine_all(X)
+                return self._reshape_results(self._model.predict(XT))
 
             @property
             def coef_(self):
@@ -375,36 +374,6 @@ class LinearDMLCateEstimator(DMLCateEstimator):
         (or an instance of `BootstrapInference`) and 'statsmodels' (or an instance of 'StatsModelsInference`)
     """
 
-    def _get_inference_options(self):
-        # add statsmodels to parent's options
-        options = super()._get_inference_options()
-        options.update(statsmodels=StatsModelsInference)
-        return options
-
-    class StatsModelsWrapper:
-        def __init__(self):
-            self.fit_args = {}
-
-        def fit(self, X, y, sample_weight=None):
-            assert ndim(y) == 1 or (ndim(y) == 2 and shape(y)[1] == 1)
-            y = reshape(y, (-1,))
-            if sample_weight is not None:
-                ols = OLS(y, X, weights=sample_weight)
-            else:
-                ols = OLS(y, X)
-            self.results = ols.fit(**self.fit_args)
-            return self
-
-        def predict(self, X):
-            return self.results.predict(X)
-
-        def predict_interval(self, X, alpha):
-            # NOTE: we use `obs = False` to get a confidence, rather than prediction, interval
-            preds = self.results.get_prediction(X).conf_int(alpha=alpha, obs=False)
-            # statsmodels uses the last dimension instead of the first to store the confidence intervals,
-            # so we need to transpose the result
-            return transpose(preds)
-
     def __init__(self,
                  model_y=LassoCV(), model_t=LassoCV(),
                  featurizer=PolynomialFeatures(degree=1, include_bias=True),
@@ -413,16 +382,31 @@ class LinearDMLCateEstimator(DMLCateEstimator):
                  random_state=None):
         super().__init__(model_y=model_y,
                          model_t=model_t,
-                         model_final=self.StatsModelsWrapper(),
+                         model_final=StatsModelsWrapper(),
                          featurizer=featurizer,
                          sparseLinear=True,
                          discrete_treatment=discrete_treatment,
                          n_splits=n_splits,
                          random_state=random_state)
 
+        self.statsmodelswrapper = self._model_final._model
+
+    def _get_inference_options(self):
+        # add statsmodels to parent's options
+        options = super()._get_inference_options()
+        options.update(statsmodels=StatsModelsInference)
+        return options
+
+    @property
+    def statsmodelsproperties(self):
+        return StatsModelsInference.StatsModelsProperties(self.statsmodelswrapper,
+                                                          self._model_final._combine,
+                                                          self._model_final._combine_all,
+                                                          self._model_final._reshape_results)
+
     @property
     def coef_(self):
-        return self._model_final._model.results.params
+        return self.statsmodelswrapper.results.params
 
 
 class SparseLinearDMLCateEstimator(DMLCateEstimator):

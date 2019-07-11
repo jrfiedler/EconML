@@ -6,6 +6,7 @@
 import abc
 import numpy as np
 from functools import wraps
+from copy import deepcopy
 from .bootstrap import BootstrapEstimator
 from .inference import BootstrapInference
 from .utilities import tensordot, ndim, reshape, shape
@@ -55,6 +56,12 @@ class BaseCateEstimator(metaclass=abc.ABCMeta):
         options = self._get_inference_options()
         if inference in options:
             inference = options[inference]()
+        # since inference objects can be stateful, copy it before fitting; otherwise this sequence wouldn't work:
+        #   est1.fit(..., inference=inf)
+        #   est2.fit(..., inference=inf)
+        #   est1.effect_interval(...)
+        # because inf now stores state from fitting est2
+        inference = deepcopy(inference)
         if inference is not None:
             inference.fit(self, *args, **kwargs)
         self._inference = inference
