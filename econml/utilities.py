@@ -430,6 +430,57 @@ def check_inputs(Y, T, X, W=None, multi_output_T=True, multi_output_Y=True):
     return Y, T, X, W
 
 
+def broadcast_unit_treatments(X, d_t):
+    """
+    Generate `d_t` unit treatments for each row of `X`.
+
+    Parameters
+    ----------
+    d_t: int
+        Number of treatments
+    X : array
+        Features
+
+    Returns
+    -------
+    X, T : (array, array)
+        The updated `X` array (with each row repeated `d_t` times),
+        and the generated `T` array
+    """
+    d_x = shape(X)[0]
+    eye = np.eye(d_t)
+    # tile T and repeat X along axis 0 (so that the duplicated rows of X remain consecutive)
+    T = np.tile(eye, (d_x, 1))
+    Xs = np.repeat(X, d_t, axis=0)
+    return Xs, T
+
+
+def reshape_treatmentwise_effects(A, d_t, d_y):
+    """
+    Given an effects matrix ordered first by treatment, transform it to be ordered by outcome.
+
+    Parameters
+    ----------
+    A : array
+        The array of effects, of size n*d_y*d_t
+    d_t : tuple of int
+        Either () if T was a vector, or a 1-tuple of the number of columns of T if it was an array
+    d_y : tuple of int
+        Either () if Y was a vector, or a 1-tuple of the number of columns of Y if it was an array
+
+    Returns
+    -------
+    A : array (shape (m, d_y, d_t))
+        The transformed array.  Note that singleton dimensions will be dropped for any inputs which
+        were vectors, as in the specification of `BaseCateEstimator.marginal_effect`.
+    """
+    A = reshape(A, (-1,) + d_t + d_y)
+    if d_t and d_y:
+        return transpose(A, (0, 2, 1))  # need to return as m by d_y by d_t matrix
+    else:
+        return A
+
+
 def einsum_sparse(subscripts, *arrs):
     """
     Evaluate the Einstein summation convention on the operands.

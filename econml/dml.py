@@ -11,7 +11,8 @@ from the treatment residuals.
 
 import numpy as np
 import copy
-from .utilities import shape, reshape, ndim, hstack, cross_product, transpose, StatsModelsWrapper
+from .utilities import (shape, reshape, ndim, hstack, cross_product, transpose,
+                        broadcast_unit_treatments, reshape_treatmentwise_effects, StatsModelsWrapper)
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.linear_model import LinearRegression, LassoCV
 from sklearn.preprocessing import PolynomialFeatures, LabelEncoder, OneHotEncoder
@@ -20,6 +21,32 @@ from sklearn.pipeline import Pipeline
 from sklearn.utils import check_random_state
 from .cate_estimator import LinearCateEstimator
 from .inference import StatsModelsInference
+
+
+class _EffectOperation:
+    def __init__(self, pre, d_t, d_y):
+        self._pre = pre
+        self._d_t = d_t
+        self._d_y = d_y
+
+    def apply(self, predict, input, interval, make_const_marginal_effect, *args, **kwargs):
+        if make_const_marginal_effect:
+            # for constant marginal effects, we first need to broadcast each possible treatment
+            # to each input row
+            input = broadcast_unit_treatments(input, self._d_t[0] if self._d_t else 1)
+        preds = predict(self._pre(input), *args, **kwargs)
+        if make_const_marginal_effect:
+            # for constant marginal effects, we need to reshape the results to ensure
+            # that effects are ordered first by outcome, then by treatment
+            if interval:
+                # we want to apply the transformation separately to each half of the interval
+                assert shape(preds)[0] == 2
+                return np.stack([reshape_treatmentwise_effects(pred, self._d_t, self._d_y)
+                                 for pred in preds])
+            else:
+                return reshape_treatmentwise_effects(preds, self._d_t, self._d_y)
+        else:
+            return preds
 
 
 class _RLearner(LinearCateEstimator):
@@ -290,28 +317,13 @@ class DMLCateEstimator(_RLearner):
             def _combine(self, X, T):
                 return cross_product(self._featurizer.fit_transform(X), T)
 
-            # combine X with each marginal treatment
-            def _combine_all(self, X):
-                # create an identity matrix of size d_t (or just a 1-element array if T was a vector)
-                # the nth row will allow us to compute the marginal effect of the nth component of treatment
-                d_x = shape(X)[0]
-                d_t = self._d_t[0] if self._d_t else 1
-                eye = np.eye(d_t)
-                # tile T and repeat X along axis 0 (so that the duplicated rows of X remain consecutive)
-                T = np.tile(eye, (d_x, 1))
-                Xs = np.repeat(X, d_t, axis=0)
-                return self._combine(Xs, T)
-
-            def _reshape_results(self, A):
-                A = reshape(A, (-1,) + self._d_t + self._d_y)
-                if self._d_t and self._d_y:
-                    return transpose(A, (0, 2, 1))  # need to return as m by d_y by d_t matrix
-                else:
-                    return A
+            @property
+            def effect_op(self):
+                return _EffectOperation(lambda XT: self._combine(*XT), d_t=self._d_t, d_y=self._d_y)
 
             def predict(self, X):
-                XT = self._combine_all(X)
-                return self._reshape_results(self._model.predict(XT))
+                return self.effect_op.apply(self._model.predict, X,
+                                            interval=False, make_const_marginal_effect=True)
 
             @property
             def coef_(self):
@@ -400,9 +412,7 @@ class LinearDMLCateEstimator(DMLCateEstimator):
     @property
     def statsmodelsproperties(self):
         return StatsModelsInference.StatsModelsProperties(self.statsmodelswrapper,
-                                                          self._model_final._combine,
-                                                          self._model_final._combine_all,
-                                                          self._model_final._reshape_results)
+                                                          self._model_final.effect_op)
 
     @property
     def coef_(self):

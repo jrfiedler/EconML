@@ -8,7 +8,8 @@ from .bootstrap import BootstrapEstimator
 """Options for performing inference in estimators."""
 
 
-class Inference:
+class Inference(metaclass=abc.ABCMeta):
+    @abc.abstractmethod
     def fit(self, estimator, *args, **kwargs):
         pass
 
@@ -39,6 +40,9 @@ class BootstrapInference(Inference):
         self._est = est
 
     def __getattr__(self, name):
+        if name.startswith('__'):
+            raise AttributeError()
+
         m = getattr(self._est, name)
 
         def wrapped(*args, alpha=0.1, **kwargs):
@@ -87,22 +91,12 @@ class StatsModelsInference(Inference):
         ----------
         wrapper : StatsModelsWrapper
             The `StatsModelsWrapper` used by the estimator
-        combine : function (from features and treatments to model inputs)
-            Function that combines raw features and treatments to get the inputs
-            to the statsmodels model
-        combine_all : function (from features to model inputs)
-            Function that combines raw features with each unit treatment to get the
-            inputs to the statstmodels model
-        reshape_results : function
-            Function to take outputs ordered by treatment then outcome and permute
-            so that outcome varies more rapidly than treatment (if necessary)
+        effect_op : The `_EffectOperation` that corresponds to prediction for this estimator
         """
 
-        def __init__(self, wrapper, combine, combine_all, reshape_results):
+        def __init__(self, wrapper, effect_op):
             self.wrapper = wrapper
-            self.combine = combine
-            self.combine_all = combine_all
-            self.reshape_results = reshape_results
+            self.effect_op = effect_op
 
     def fit(self, estimator, *args, **kwargs):
         self.props = estimator.statsmodelsproperties
@@ -110,11 +104,9 @@ class StatsModelsInference(Inference):
         self.props.wrapper.fit_args = {'cov_type': self.cov_type, 'cov_kwds': self.cov_kwds}
 
     def effect_interval(self, X, *, T0=0, T1=1, alpha=0.1):
-        dT = T1 - T0
-        preds = self.props.wrapper.predict_interval(self.props.combine(X, dT), alpha=alpha)
-        return preds
+        return self.props.effect_op.apply(self.props.wrapper.predict_interval, (X, T1 - T0),
+                                          interval=True, make_const_marginal_effect=False, alpha=alpha)
 
     def const_marginal_effect_interval(self, X, *, alpha=0.1):
-        XT = self.props.combine_all(X)
-        preds = self.props.wrapper.predict_interval(XT, alpha=alpha)
-        return np.stack([self.props.reshape_results(pred) for pred in preds])
+        return self.props.effect_op.apply(self.props.wrapper.predict_interval, X,
+                                          interval=True, make_const_marginal_effect=True, alpha=alpha)
