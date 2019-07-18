@@ -13,6 +13,7 @@ from sklearn.base import TransformerMixin
 from functools import reduce
 from sklearn.utils import check_array, check_X_y
 from statsmodels.regression.linear_model import OLS
+from statsmodels.tools.tools import add_constant
 
 MAX_RAND_SEED = np.iinfo(np.int32).max
 
@@ -755,6 +756,11 @@ class StatsModelsWrapper:
     """
     Helper class to wrap a StatsModels OLS model to conform to the sklearn API.
 
+    Parameters
+    ----------
+    fit_intercept: bool (default False)
+        Whether to fit an intercept
+
     Attributes
     ----------
     fit_args: dict of str: object
@@ -764,8 +770,9 @@ class StatsModelsWrapper:
         After `fit` has been called, this attribute will store the regression results.
     """
 
-    def __init__(self):
+    def __init__(self, fit_intercept=False):
         self.fit_args = {}
+        self.fit_intercept = fit_intercept
 
     def fit(self, X, y, sample_weight=None):
         """
@@ -786,6 +793,8 @@ class StatsModelsWrapper:
         """
         assert ndim(y) == 1 or (ndim(y) == 2 and shape(y)[1] == 1)
         y = reshape(y, (-1,))
+        if self.fit_intercept:
+            X = add_constant(X, has_constant='add')
         if sample_weight is not None:
             ols = OLS(y, X, weights=sample_weight)
         else:
@@ -807,6 +816,8 @@ class StatsModelsWrapper:
         array, shape (n_samples,)
             Predicted values
         """
+        if self.fit_intercept:
+            X = add_constant(X, has_constant='add')
         return self.results.predict(X)
 
     def predict_interval(self, X, alpha):
@@ -825,6 +836,8 @@ class StatsModelsWrapper:
         array, shape (2, n_samples)
             Lower and upper bounds for the confidence interval at each sample point
         """
+        if self.fit_intercept:
+            X = add_constant(X, has_constant='add')
         # NOTE: we use `obs = False` to get a confidence, rather than prediction, interval
         preds = self.results.get_prediction(X).conf_int(alpha=alpha, obs=False)
         # statsmodels uses the last dimension instead of the first to store the confidence intervals,
