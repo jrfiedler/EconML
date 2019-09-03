@@ -241,11 +241,11 @@ class DMLCateEstimator(_RLearner):
     ----------
     model_y: estimator
         The estimator for fitting the response to the features. Must implement
-        `fit` and `predict` methods.  Must be a linear model for correctness when sparseLinear is `True`.
+        `fit` and `predict` methods.  Must be a linear model for correctness when linear_first_stages is `True`.
 
     model_t: estimator
         The estimator for fitting the treatment to the features. Must implement
-        `fit` and `predict` methods.  Must be a linear model for correctness when sparseLinear is `True`.
+        `fit` and `predict` methods.  Must be a linear model for correctness when linear_first_stages is `True`.
 
     model_final: estimator
         The estimator for fitting the response residuals to the treatment residuals. Must implement
@@ -255,8 +255,9 @@ class DMLCateEstimator(_RLearner):
         The transformer used to featurize the raw features when fitting the final model.  Must implement
         a `fit_transform` method.
 
-    sparseLinear: bool
-        Whether to use sparse linear model assumptions
+    linear_first_stages: bool
+        Whether the first stage models are linear (in which case we will expand the features passed to
+        `model_y` accordingly)
 
     discrete_treatment: bool
         Whether the treatment values should be treated as categorical, rather than continuous, quantities
@@ -274,7 +275,7 @@ class DMLCateEstimator(_RLearner):
     def __init__(self,
                  model_y, model_t, model_final,
                  featurizer,
-                 sparseLinear=False,
+                 linear_first_stages=False,
                  discrete_treatment=False,
                  n_splits=2,
                  random_state=None):
@@ -286,7 +287,7 @@ class DMLCateEstimator(_RLearner):
                 self._is_Y = is_Y
 
             def _combine(self, X, W):
-                if self._is_Y and sparseLinear:
+                if self._is_Y and linear_first_stages:
                     F = self._featurizer.fit_transform(X)
                     XW = hstack([X, W])
                     return cross_product(XW, hstack([np.ones((shape(XW)[0], 1)), F, W]))
@@ -375,6 +376,10 @@ class LinearDMLCateEstimator(DMLCateEstimator):
         The transformer used to featurize the raw features when fitting the final model.  Must implement
         a `fit_transform` method.
 
+    linear_first_stages: bool
+        Whether the first stage models are linear (in which case we will expand the features passed to
+        `model_y` accordingly)
+
     discrete_treatment: bool, optional (default is False)
         Whether the treatment values should be treated as categorical, rather than continuous, quantities
 
@@ -395,6 +400,7 @@ class LinearDMLCateEstimator(DMLCateEstimator):
     def __init__(self,
                  model_y=LassoCV(), model_t=LassoCV(),
                  featurizer=PolynomialFeatures(degree=1, include_bias=True),
+                 linear_first_stages=True,
                  discrete_treatment=False,
                  n_splits=2,
                  random_state=None):
@@ -402,7 +408,7 @@ class LinearDMLCateEstimator(DMLCateEstimator):
                          model_t=model_t,
                          model_final=StatsModelsWrapper(),
                          featurizer=featurizer,
-                         sparseLinear=True,
+                         linear_first_stages=linear_first_stages,
                          discrete_treatment=discrete_treatment,
                          n_splits=n_splits,
                          random_state=random_state)
@@ -451,6 +457,10 @@ class SparseLinearDMLCateEstimator(DMLCateEstimator):
         The transformer used to featurize the raw features when fitting the final model.  Must implement
         a `fit_transform` method.
 
+    linear_first_stages: bool
+        Whether the first stage models are linear (in which case we will expand the features passed to
+        `model_y` accordingly)
+
     discrete_treatment: bool, optional (default is False)
         Whether the treatment values should be treated as categorical, rather than continuous, quantities
 
@@ -467,6 +477,7 @@ class SparseLinearDMLCateEstimator(DMLCateEstimator):
     def __init__(self,
                  linear_model_y=LassoCV(), linear_model_t=LassoCV(), model_final=LinearRegression(fit_intercept=False),
                  featurizer=PolynomialFeatures(degree=1, include_bias=True),
+                 linear_first_stages=True,
                  discrete_treatment=False,
                  n_splits=2,
                  random_state=None):
@@ -474,7 +485,7 @@ class SparseLinearDMLCateEstimator(DMLCateEstimator):
                          model_t=linear_model_t,
                          model_final=model_final,
                          featurizer=featurizer,
-                         sparseLinear=True,
+                         linear_first_stages=linear_first_stages,
                          discrete_treatment=discrete_treatment,
                          n_splits=n_splits,
                          random_state=random_state)
