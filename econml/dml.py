@@ -88,13 +88,21 @@ class _RLearner(LinearCateEstimator):
         self._n_splits = n_splits
         self._discrete_treatment = discrete_treatment
         self._random_state = check_random_state(random_state)
+        if discrete_treatment:
+            self._label_encoder = LabelEncoder()
+            self._one_hot_encoder = OneHotEncoder(categories='auto', sparse=False)
         super().__init__()
 
-    def fit(self, Y, T, X=None, W=None, sample_weight=None, inference=None):
+    @staticmethod
+    def _check_X_W(X, W, Y):
         if X is None:
             X = np.ones((shape(Y)[0], 1))
         if W is None:
             W = np.empty((shape(Y)[0], 0))
+        return X, W
+
+    def fit(self, Y, T, X=None, W=None, sample_weight=None, inference=None):
+        X, W = self._check_X_W(X, W, Y)
         assert shape(Y)[0] == shape(T)[0] == shape(X)[0] == shape(W)[0]
 
         Y_res, T_res = self.fit_nuisances(Y, T, X, W, sample_weight=sample_weight)
@@ -107,8 +115,6 @@ class _RLearner(LinearCateEstimator):
         if self._discrete_treatment:
             folds = StratifiedKFold(self._n_splits, shuffle=True,
                                     random_state=self._random_state).split(np.empty_like(X), T)
-            self._label_encoder = LabelEncoder()
-            self._one_hot_encoder = OneHotEncoder(categories='auto', sparse=False)
             T = self._label_encoder.fit_transform(T)
             T_out = self._one_hot_encoder.fit_transform(reshape(T, (-1, 1)))
             T_out = T_out[:, 1:]  # drop first column since all columns sum to one
@@ -205,16 +211,12 @@ class _RLearner(LinearCateEstimator):
                                        alpha=alpha)
 
     def score(self, Y, T, X=None, W=None):
-        if self._discrete_treatment:
-            T = self._one_hot_encoder.transform(reshape(self._label_encoder.transform(T), (-1, 1)))[:, 1:]
+        X, W = self._check_X_W(X, W, Y)
+        T = self._expand_treatment(T, X)
         if T.ndim == 1:
             T = reshape(T, (-1, 1))
         if Y.ndim == 1:
             Y = reshape(Y, (-1, 1))
-        if X is None:
-            X = np.ones((shape(Y)[0], 1))
-        if W is None:
-            W = np.empty((shape(Y)[0], 0))
         Y_test_pred = np.zeros(shape(Y) + (self._n_splits,))
         T_test_pred = np.zeros(shape(T) + (self._n_splits,))
         for ind in range(self._n_splits):
