@@ -101,7 +101,7 @@ class _RLearner(LinearCateEstimator):
 
         self.fit_final(X, Y_res, T_res, sample_weight=sample_weight)
 
-        return super().fit(Y, T, X=X, W=None, sample_weight=sample_weight, inference=inference)
+        return super().fit(Y, T, X=X, W=W, sample_weight=sample_weight, inference=inference)
 
     def fit_nuisances(self, Y, T, X, W, sample_weight=None):
         if self._discrete_treatment:
