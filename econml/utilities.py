@@ -12,7 +12,7 @@ from collections import defaultdict, Counter
 from sklearn.base import TransformerMixin
 from functools import reduce
 from sklearn.utils import check_array, check_X_y
-from statsmodels.regression.linear_model import OLS
+from statsmodels.regression.linear_model import WLS
 from statsmodels.tools.tools import add_constant
 
 MAX_RAND_SEED = np.iinfo(np.int32).max
@@ -796,9 +796,9 @@ class StatsModelsWrapper:
         if self.fit_intercept:
             X = add_constant(X, has_constant='add')
         if sample_weight is not None:
-            ols = OLS(y, X, weights=sample_weight)
+            ols = WLS(y, X, weights=sample_weight, hasconst=self.fit_intercept)
         else:
-            ols = OLS(y, X)
+            ols = WLS(y, X, hasconst=self.fit_intercept)
         self.results = ols.fit(**self.fit_args)
         return self
 
