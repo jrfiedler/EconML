@@ -110,3 +110,6 @@ class StatsModelsInference(Inference):
     def const_marginal_effect_interval(self, X, *, alpha=0.1):
         return self.props.effect_op.apply(self.props.wrapper.predict_interval, X,
                                           interval=True, make_const_marginal_effect=True, alpha=alpha)
+
+    def coef__interval(self, *, alpha=0.1):
+        return self.props.wrapper.coef__interval(alpha)

@@ -54,8 +54,12 @@ class BaseCateEstimator(metaclass=abc.ABCMeta):
 
         """
         options = self._get_inference_options()
-        if inference in options:
-            inference = options[inference]()
+        if isinstance(inference, str):
+            if inference in options:
+                inference = options[inference]()
+            else:
+                raise ArgumentError("Inference option '%s' not recognized; valid values are %s" %
+                                    (inference, [*options]))
         # since inference objects can be stateful, copy it before fitting; otherwise this sequence wouldn't work:
         #   est1.fit(..., inference=inf)
         #   est2.fit(..., inference=inf)
@@ -140,13 +144,6 @@ class BaseCateEstimator(metaclass=abc.ABCMeta):
 class LinearCateEstimator(BaseCateEstimator):
     """
     Base class for all CATE estimators with linear treatment effects in this package.
-
-    Parameters
-    ----------
-    inference: string, `Inference` instance, or None
-        Method for performing inference.  All estimators support 'bootstrap'
-        (or an instance of `BootstrapInference`), some support other methods as well.
-
     """
 
     @abc.abstractmethod

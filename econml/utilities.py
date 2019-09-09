@@ -10,6 +10,7 @@ import itertools
 from operator import getitem
 from collections import defaultdict, Counter
 from sklearn.base import TransformerMixin
+from sklearn.linear_model import LassoCV, MultiTaskLassoCV
 from functools import reduce
 from sklearn.utils import check_array, check_X_y
 from statsmodels.regression.linear_model import WLS
@@ -843,3 +844,31 @@ class StatsModelsWrapper:
         # statsmodels uses the last dimension instead of the first to store the confidence intervals,
         # so we need to transpose the result
         return transpose(preds)
+
+    @property
+    def coef_(self):
+        return self.results.params
+
+    def coef__interval(self, alpha):
+        return transpose(self.results.conf_int(alpha=alpha))
+
+
+class LassoCVWrapper:
+    """Helper class to wrap either LassoCV or MultiTaskLassoCV depending on the shape of the target."""
+
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def fit(self, X, Y):
+        assert shape(X)[0] == shape(Y)[0]
+        assert ndim(Y) <= 2
+        if ndim(Y) == 2 and shape(Y)[1] > 1:
+            self.model = MultiTaskLassoCV(*self.args, **self.kwargs)
+        else:
+            self.model = LassoCV(*self.args, **self.kwargs)
+        self.model.fit(X, Y)
+        return self
+
+    def predict(self, X):
+        return self.model.predict(X)

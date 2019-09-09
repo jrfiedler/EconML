@@ -7,6 +7,7 @@ from sklearn.base import TransformerMixin
 from sklearn.linear_model import LinearRegression, Lasso, LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, FunctionTransformer
+from sklearn.model_selection import KFold
 from econml.dml import LinearDMLCateEstimator, SparseLinearDMLCateEstimator, KernelDMLCateEstimator
 import numpy as np
 from econml.utilities import shape, hstack, vstack, reshape, cross_product
@@ -32,8 +33,8 @@ class TestDML(unittest.TestCase):
                     for d_w in [2, None]:
                         for est, multi in [(LinearDMLCateEstimator(model_y=LinearRegression(),
                                                                    model_t=LinearRegression()), False),
-                                           (SparseLinearDMLCateEstimator(linear_model_y=LinearRegression(),
-                                                                         linear_model_t=LinearRegression()), True),
+                                           (SparseLinearDMLCateEstimator(model_y=LinearRegression(),
+                                                                         model_t=LinearRegression()), True),
                                            (KernelDMLCateEstimator(model_y=LinearRegression(),
                                                                    model_t=LinearRegression()), False)]:
                             n = 20
@@ -85,6 +86,11 @@ class TestDML(unittest.TestCase):
                                        [0, 2, 1, -2, 0, -1, -1, 1, 0])
         dml.score(np.array([2, 3, 1, 3, 2, 1, 1, 1]), np.array([3, 2, 1, 2, 3, 1, 1, 1]), np.ones((8, 1)))
 
+    def test_can_custom_splitter(self):
+        dml = LinearDMLCateEstimator(LinearRegression(), LogisticRegression(C=1000),
+                                     discrete_treatment=True, n_splits=KFold())
+        dml.fit(np.array([1, 2, 3, 1, 2, 3]), np.array([1, 2, 3, 1, 2, 3]), np.ones((6, 1)))
+
     def test_can_use_statsmodel_inference(self):
         """Test that we can use statsmodels to generate confidence intervals"""
         dml = LinearDMLCateEstimator(LinearRegression(), LogisticRegression(C=1000),
@@ -106,6 +112,14 @@ class TestDML(unittest.TestCase):
 
         interval = dml.marginal_effect_interval(np.ones((9, 1)), alpha=0.05)
         point = dml.marginal_effect(np.ones((9, 1)))
+        self.assertEqual(interval.shape, (2,) + point.shape)
+        lo, hi = interval
+        assert (lo <= point).all()
+        assert (point <= hi).all()
+        assert (lo < hi).any()  # for at least some of the examples, the CI should have nonzero width
+
+        interval = dml.coef__interval(alpha=0.05)
+        point = dml.coef_
         self.assertEqual(interval.shape, (2,) + point.shape)
         lo, hi = interval
         assert (lo <= point).all()
