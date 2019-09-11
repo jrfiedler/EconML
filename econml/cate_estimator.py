@@ -7,15 +7,14 @@ import abc
 import numpy as np
 from functools import wraps
 from copy import deepcopy
+from warnings import warn
 from .bootstrap import BootstrapEstimator
 from .inference import BootstrapInference
 from .utilities import tensordot, ndim, reshape, shape
 
 
 class BaseCateEstimator(metaclass=abc.ABCMeta):
-    """
-    Base class for all CATE estimators in this package.
-    """
+    """Base class for all CATE estimators in this package."""
 
     def _get_inference_options(self):
         """
@@ -24,6 +23,26 @@ class BaseCateEstimator(metaclass=abc.ABCMeta):
         This is used by the `fit` method when a string is passed rather than an `Inference` type.
         """
         return {'bootstrap': BootstrapInference}
+
+    def _get_inference(self, inference):
+        options = self._get_inference_options()
+        if isinstance(inference, str):
+            if inference in options:
+                inference = options[inference]()
+            else:
+                raise ArgumentError("Inference option '%s' not recognized; valid values are %s" %
+                                    (inference, [*options]))
+        # since inference objects can be stateful, we must copy it before fitting;
+        # otherwise this sequence wouldn't work:
+        #   est1.fit(..., inference=inf)
+        #   est2.fit(..., inference=inf)
+        #   est1.effect_interval(...)
+        # because inf now stores state from fitting est2
+        return deepcopy(inference)
+
+    def _prefit(self, Y, T, *args, **kwargs):
+        self._d_y = np.shape(Y)[1:]
+        self._d_t = np.shape(T)[1:]
 
     @abc.abstractmethod
     def fit(self, *args, inference=None, **kwargs):
@@ -48,28 +67,29 @@ class BaseCateEstimator(metaclass=abc.ABCMeta):
         inference: optional string, `Inference` instance, or None
             Method for performing inference.  All estimators support 'bootstrap'
             (or an instance of `BootstrapInference`), some support other methods as well.
+
         Returns
         -------
         self
 
         """
-        options = self._get_inference_options()
-        if isinstance(inference, str):
-            if inference in options:
-                inference = options[inference]()
-            else:
-                raise ArgumentError("Inference option '%s' not recognized; valid values are %s" %
-                                    (inference, [*options]))
-        # since inference objects can be stateful, copy it before fitting; otherwise this sequence wouldn't work:
-        #   est1.fit(..., inference=inf)
-        #   est2.fit(..., inference=inf)
-        #   est1.effect_interval(...)
-        # because inf now stores state from fitting est2
-        inference = deepcopy(inference)
-        if inference is not None:
-            inference.fit(self, *args, **kwargs)
-        self._inference = inference
-        return self
+        pass
+
+    def _wrap_fit(m):
+        @wraps(m)
+        def call(self, Y, T, *args, inference=None, **kwargs):
+            inference = self._get_inference(inference)
+            self._prefit(Y, T, *args, **kwargs)
+            if inference is not None:
+                inference.prefit(self, Y, T, *args, **kwargs)
+            # call the wrapped fit method
+            m(self, Y, T, *args, **kwargs)
+            if inference is not None:
+                # NOTE: we call inference fit *after* calling the main fit method
+                inference.fit(self, Y, T, *args, **kwargs)
+            self._inference = inference
+            return self
+        return call
 
     @abc.abstractmethod
     def effect(self, X=None, T0=0, T1=1):
@@ -129,7 +149,7 @@ class BaseCateEstimator(metaclass=abc.ABCMeta):
             if self._inference is not None:
                 return getattr(self._inference, name)(*args, **kwargs)
             else:
-                AttributeError("Can't call '%s' because 'inference' is None" % name)
+                raise AttributeError("Can't call '%s' because 'inference' is None" % name)
         return call
 
     @_defer_to_inference
@@ -142,9 +162,7 @@ class BaseCateEstimator(metaclass=abc.ABCMeta):
 
 
 class LinearCateEstimator(BaseCateEstimator):
-    """
-    Base class for all CATE estimators with linear treatment effects in this package.
-    """
+    """Base class for all CATE estimators with linear treatment effects in this package."""
 
     @abc.abstractmethod
     def const_marginal_effect(self, X=None):
@@ -196,14 +214,16 @@ class LinearCateEstimator(BaseCateEstimator):
         """
         # TODO: what if input is sparse? - there's no equivalent to einsum,
         #       but tensordot can't be applied to this problem because we don't sum over m
-        # TODO: if T0 or T1 are scalars, we'll promote them to vectors;
-        #       should it be possible to promote them to 2D arrays if that's what we saw during training?
         eff = self.const_marginal_effect(X)
         m = shape(eff)[0]
+        if (ndim(T0) == 0 or ndim(T1) == 0) and self._d_t and shape(self._d_t)[1] > 1:
+            warn("A scalar was specified but there are multiple treatments; "
+                 "the same value will be used for each treatment.  Consider specifying"
+                 "all treatments, or using the const_marginal_effect method.")
         if ndim(T0) == 0:
-            T0 = np.repeat(T0, m)
+            T0 = np.repeat(T0, (m,) + self._d_t)
         if ndim(T1) == 0:
-            T1 = np.repeat(T1, m)
+            T1 = np.repeat(T1, (m,) + self._d_t)
         dT = T1 - T0
         einsum_str = 'myt,mt->my'
         if ndim(dT) == 1:

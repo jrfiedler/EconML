@@ -13,7 +13,7 @@ import numpy as np
 import copy
 from .utilities import (shape, reshape, ndim, hstack, cross_product, transpose,
                         broadcast_unit_treatments, reshape_treatmentwise_effects,
-                        StatsModelsWrapper, LassoCVWrapper)
+                        StatsModelsLinearRegression, LassoCVWrapper)
 from sklearn.model_selection import KFold, StratifiedKFold, check_cv
 from sklearn.linear_model import LinearRegression, LassoCV
 from sklearn.preprocessing import PolynomialFeatures, LabelEncoder, OneHotEncoder
@@ -118,7 +118,8 @@ class _RLearner(LinearCateEstimator):
             W = np.empty((shape(Y)[0], 0))
         return X, W
 
-    def fit(self, Y, T, X=None, W=None, sample_weight=None, inference=None):
+    @BaseCateEstimator._wrap_fit
+    def fit(self, Y, T, X=None, W=None, sample_weight=None, sample_var=None, inference=None):
         """
         Estimate the counterfactual model from data, i.e. estimates functions τ(·,·,·), ∂τ(·,·).
 
@@ -147,9 +148,7 @@ class _RLearner(LinearCateEstimator):
 
         Y_res, T_res = self.fit_nuisances(Y, T, X, W, sample_weight=sample_weight)
 
-        self.fit_final(X, Y_res, T_res, sample_weight=sample_weight)
-
-        return super().fit(Y, T, X=X, W=W, sample_weight=sample_weight, inference=inference)
+        self.fit_final(X, Y_res, T_res, sample_weight=sample_weight, sample_var=sample_var)
 
     def fit_nuisances(self, Y, T, X, W, sample_weight=None):
         # use a binary array to get stratified split in case of discrete treatment
@@ -195,9 +194,12 @@ class _RLearner(LinearCateEstimator):
             Y_res[test_idxs] = Y_test - self._models_y[idx].predict(X_test, W_test)
         return Y_res, T_res
 
-    def fit_final(self, X, Y_res, T_res, sample_weight=None):
+    def fit_final(self, X, Y_res, T_res, sample_weight=None, sample_var=None):
         if sample_weight is not None:
-            self._model_final.fit(X, T_res, Y_res, sample_weight=sample_weight)
+            if sample_var is None:
+                self._model_final.fit(X, T_res, Y_res, sample_weight=sample_weight)
+            else:
+                self._model_final.fit(X, T_res, Y_res, sample_weight=sample_weight, sample_var=sample_var)
         else:
             self._model_final.fit(X, T_res, Y_res)
 
@@ -366,13 +368,17 @@ class DMLCateEstimator(_RLearner):
                 self._model = clone(model_final, safe=False)
                 self._featurizer = clone(featurizer, safe=False)
 
-            def fit(self, X, T_res, Y_res, sample_weight=None):
+            def fit(self, X, T_res, Y_res, sample_weight=None, sample_var=None):
                 # Track training dimensions to see if Y or T is a vector instead of a 2-dimensional array
                 self._d_t = shape(T_res)[1:]
                 self._d_y = shape(Y_res)[1:]
                 if sample_weight is not None:
-                    self._model.fit(self._combine(X, T_res),
-                                    Y_res, sample_weight=sample_weight)
+                    if sample_var is not None:
+                        self._model.fit(self._combine(X, T_res),
+                                        Y_res, sample_weight=sample_weight, sample_var=sample_var)
+                    else:
+                        self._model.fit(self._combine(X, T_res),
+                                        Y_res, sample_weight=sample_weight)
                 else:
                     self._model.fit(self._combine(X, T_res), Y_res)
 
@@ -468,6 +474,7 @@ class LinearDMLCateEstimator(DMLCateEstimator):
 
     def __init__(self,
                  model_y=LassoCV(), model_t=LassoCV(),
+                 model_final=StatsModelsLinearRegression(fit_intercept=False),
                  featurizer=PolynomialFeatures(degree=1, include_bias=True),
                  linear_first_stages=True,
                  discrete_treatment=False,
@@ -475,16 +482,23 @@ class LinearDMLCateEstimator(DMLCateEstimator):
                  random_state=None):
         super().__init__(model_y=model_y,
                          model_t=model_t,
-                         model_final=StatsModelsWrapper(),
+                         model_final=model_final,
                          featurizer=featurizer,
                          linear_first_stages=linear_first_stages,
                          discrete_treatment=discrete_treatment,
                          n_splits=n_splits,
                          random_state=random_state)
 
-        self.statsmodelswrapper = self._model_final._model
+        self.statsmodels = self._model_final._model
 
-    def fit(self, Y, T, X=None, W=None, sample_weight=None, inference=None):
+    def _get_inference_options(self):
+        # add statsmodels to parent's options
+        options = super()._get_inference_options()
+        options.update(statsmodels=StatsModelsInference)
+        return options
+
+    # override only so that we can update the docstring to indicate support for `StatsModelsInference`
+    def fit(self, Y, T, X=None, W=None, sample_weight=None, sample_var=None, inference=None):
         """
         Estimate the counterfactual model from data, i.e. estimates functions τ(·,·,·), ∂τ(·,·).
 
@@ -509,22 +523,15 @@ class LinearDMLCateEstimator(DMLCateEstimator):
         -------
         self
         """
-        return super().fit(Y, T, X=X, W=W, sample_weight=sample_weight, inference=inference)
-
-    def _get_inference_options(self):
-        # add statsmodels to parent's options
-        options = super()._get_inference_options()
-        options.update(statsmodels=StatsModelsInference)
-        return options
+        return super().fit(Y, T, X=X, W=W, sample_weight=sample_weight, sample_var=sample_var, inference=inference)
 
     @property
-    def statsmodelsproperties(self):
-        return StatsModelsInference.StatsModelsProperties(self.statsmodelswrapper,
-                                                          self._model_final.effect_op)
+    def effect_op(self):
+        return self._model_final.effect_op
 
     @property
     def coef_(self):
-        return self.statsmodelswrapper.coef_
+        return self.statsmodels.coef_
 
 
 class SparseLinearDMLCateEstimator(DMLCateEstimator):
