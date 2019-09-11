@@ -107,6 +107,7 @@ class _RLearner(LinearCateEstimator):
             W = np.empty((shape(Y)[0], 0))
         return X, W
 
+    @BaseCateEstimator._wrap_fit
     def fit(self, Y, T, X=None, W=None, sample_weight=None, inference=None):
         """
         Estimate the counterfactual model from data, i.e. estimates functions τ(·,·,·), ∂τ(·,·).
@@ -137,8 +138,6 @@ class _RLearner(LinearCateEstimator):
         Y_res, T_res = self.fit_nuisances(Y, T, X, W, sample_weight=sample_weight)
 
         self.fit_final(X, Y_res, T_res, sample_weight=sample_weight)
-
-        return super().fit(Y, T, X=X, W=W, sample_weight=sample_weight, inference=inference)
 
     def fit_nuisances(self, Y, T, X, W, sample_weight=None):
         if isinstance(self._n_splits, int):
@@ -456,6 +455,13 @@ class LinearDMLCateEstimator(DMLCateEstimator):
 
         self.statsmodelswrapper = self._model_final._model
 
+    def _get_inference_options(self):
+        # add statsmodels to parent's options
+        options = super()._get_inference_options()
+        options.update(statsmodels=StatsModelsInference)
+        return options
+
+    # override only so that we can update the docstring to indicate support for `StatsModelsInference`
     def fit(self, Y, T, X=None, W=None, sample_weight=None, inference=None):
         """
         Estimate the counterfactual model from data, i.e. estimates functions τ(·,·,·), ∂τ(·,·).
@@ -482,16 +488,9 @@ class LinearDMLCateEstimator(DMLCateEstimator):
         """
         return super().fit(Y, T, X=X, W=W, sample_weight=sample_weight, inference=inference)
 
-    def _get_inference_options(self):
-        # add statsmodels to parent's options
-        options = super()._get_inference_options()
-        options.update(statsmodels=StatsModelsInference)
-        return options
-
     @property
-    def statsmodelsproperties(self):
-        return StatsModelsInference.StatsModelsProperties(self.statsmodelswrapper,
-                                                          self._model_final.effect_op)
+    def effect_op(self):
+        return self._model_final.effect_op
 
     @property
     def coef_(self):
