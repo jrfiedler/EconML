@@ -82,7 +82,7 @@ class StatsModelsInference(Inference):
         documentation for further information.
     """
 
-    def __init__(self, cov_type='HC1', **cov_kwds):
+    def __init__(self, cov_type='HC1', use_t=False, **cov_kwds):
         if cov_kwds and cov_type != 'fixed scale':
             raise ValueError("Keyword arguments are only supported by the 'fixed scale' cov_type")
         if cov_type not in ['nonrobust', 'fixed scale', 'HC0', 'HC1', 'HC2', 'HC3']:
@@ -91,12 +91,13 @@ class StatsModelsInference(Inference):
                              "'fixed scale', 'HC0', 'HC1', 'HC2', or 'HC3'")
 
         self.cov_type = cov_type
+        self.use_t = use_t
         self.cov_kwds = cov_kwds
 
     def prefit(self, estimator, *args, **kwargs):
         self.statsmodelswrapper = estimator.statsmodelswrapper
         # need to set the fit args before the estimator is fit
-        self.statsmodelswrapper.fit_args = {'cov_type': self.cov_type, 'cov_kwds': self.cov_kwds}
+        self.statsmodelswrapper.fit_args = {'cov_type': self.cov_type, 'use_t': self.use_t, 'cov_kwds': self.cov_kwds}
 
     def fit(self, estimator, *args, **kwargs):
         # once the estimator has been fit, it's kosher to access its effect_op and store it here

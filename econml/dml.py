@@ -108,7 +108,7 @@ class _RLearner(LinearCateEstimator):
         return X, W
 
     @BaseCateEstimator._wrap_fit
-    def fit(self, Y, T, X=None, W=None, sample_weight=None, inference=None):
+    def fit(self, Y, T, X=None, W=None, sample_weight=None, var_weight=None, inference=None):
         """
         Estimate the counterfactual model from data, i.e. estimates functions τ(·,·,·), ∂τ(·,·).
 
@@ -137,7 +137,7 @@ class _RLearner(LinearCateEstimator):
 
         Y_res, T_res = self.fit_nuisances(Y, T, X, W, sample_weight=sample_weight)
 
-        self.fit_final(X, Y_res, T_res, sample_weight=sample_weight)
+        self.fit_final(X, Y_res, T_res, sample_weight=sample_weight, var_weight=var_weight)
 
     def fit_nuisances(self, Y, T, X, W, sample_weight=None):
         if isinstance(self._n_splits, int):
@@ -190,9 +190,12 @@ class _RLearner(LinearCateEstimator):
             Y_res[test_idxs] = Y_test - Y_pred
         return Y_res, T_res
 
-    def fit_final(self, X, Y_res, T_res, sample_weight=None):
+    def fit_final(self, X, Y_res, T_res, sample_weight=None, var_weight=None):
         if sample_weight is not None:
-            self._model_final.fit(X, T_res, Y_res, sample_weight=sample_weight)
+            if var_weight is None:
+                self._model_final.fit(X, T_res, Y_res, sample_weight=sample_weight)
+            else:
+                self._model_final.fit(X, T_res, Y_res, sample_weight=sample_weight, var_weight=var_weight)
         else:
             self._model_final.fit(X, T_res, Y_res)
 
@@ -350,12 +353,16 @@ class DMLCateEstimator(_RLearner):
                 self._model = clone(model_final, safe=False)
                 self._featurizer = clone(featurizer, safe=False)
 
-            def fit(self, X, T_res, Y_res, sample_weight=None):
+            def fit(self, X, T_res, Y_res, sample_weight=None, var_weight=None):
                 # Track training dimensions to see if Y or T is a vector instead of a 2-dimensional array
                 self._d_t = shape(T_res)[1:]
                 self._d_y = shape(Y_res)[1:]
                 if sample_weight is not None:
-                    self._model.fit(self._combine(X, T_res),
+                    if var_weight is not None:
+                        self._model.fit(self._combine(X, T_res),
+                                    Y_res, sample_weight=sample_weight, var_weight=var_weight)
+                    else:
+                        self._model.fit(self._combine(X, T_res),
                                     Y_res, sample_weight=sample_weight)
                 else:
                     self._model.fit(self._combine(X, T_res), Y_res)
@@ -439,6 +446,7 @@ class LinearDMLCateEstimator(DMLCateEstimator):
 
     def __init__(self,
                  model_y=LassoCV(), model_t=LassoCV(),
+                 model_final=StatsModelsWrapper(fit_intercept=False),
                  featurizer=PolynomialFeatures(degree=1, include_bias=True),
                  linear_first_stages=True,
                  discrete_treatment=False,
@@ -446,7 +454,7 @@ class LinearDMLCateEstimator(DMLCateEstimator):
                  random_state=None):
         super().__init__(model_y=model_y,
                          model_t=model_t,
-                         model_final=StatsModelsWrapper(),
+                         model_final=model_final,
                          featurizer=featurizer,
                          linear_first_stages=linear_first_stages,
                          discrete_treatment=discrete_treatment,
@@ -462,7 +470,7 @@ class LinearDMLCateEstimator(DMLCateEstimator):
         return options
 
     # override only so that we can update the docstring to indicate support for `StatsModelsInference`
-    def fit(self, Y, T, X=None, W=None, sample_weight=None, inference=None):
+    def fit(self, Y, T, X=None, W=None, sample_weight=None, var_weight=None, inference=None):
         """
         Estimate the counterfactual model from data, i.e. estimates functions τ(·,·,·), ∂τ(·,·).
 
@@ -486,7 +494,7 @@ class LinearDMLCateEstimator(DMLCateEstimator):
         -------
         self
         """
-        return super().fit(Y, T, X=X, W=W, sample_weight=sample_weight, inference=inference)
+        return super().fit(Y, T, X=X, W=W, sample_weight=sample_weight, var_weight=var_weight, inference=inference)
 
     @property
     def effect_op(self):
