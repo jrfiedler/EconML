@@ -1,12 +1,15 @@
 import numpy as np
 from econml.dml import LinearDMLCateEstimator
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, MultiTaskLassoCV, MultiTaskLasso, Lasso
 from econml.inference import StatsModelsInference
 from econml.tests.test_statsmodels import _summarize
+from econml.utilities import WeightedModelWrapper, LassoCVWrapper
 from statsmodels.tools.tools import add_constant
 import matplotlib.pyplot as plt
 import os
 import time
+import argparse
+import warnings
 
 def _coverage_profile(est, X_test, alpha, true_coef, true_effect):
     cov = {}
@@ -14,7 +17,7 @@ def _coverage_profile(est, X_test, alpha, true_coef, true_effect):
     cov['coef_cov'] = (true_coef >= coef_interval[0]) & (true_coef <= coef_interval[1])
     cov['coef_length'] = coef_interval[1] - coef_interval[0]
     effect_interval = est.effect_interval(X_test, alpha=alpha)
-    true_eff = true_effect(X_test)
+    true_eff = true_effect(X_test).reshape(effect_interval[0].shape)
     cov['effect_cov'] = (true_eff >= effect_interval[0]) & (true_eff <= effect_interval[1])
     cov['effect_length'] = effect_interval[1] - effect_interval[0]
     return cov
@@ -37,7 +40,7 @@ def _agg_coverage(coverage):
             mean_coverage_est[key][cov_key] = np.mean(cov_list, axis=0)
     return mean_coverage_est
 
-def plot_coverage(coverage, cov_key, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="", print_matrix=False):
+def plot_coverage(coverage, cov_key, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="", folder="", print_matrix=False):
     for d in d_list:
         for d_x in d_x_list:
             if d_x > d:
@@ -53,10 +56,12 @@ def plot_coverage(coverage, cov_key, d_list, d_x_list, p_list, cov_type_list, al
                         plt.hist(coverage[key][cov_key].flatten())
                         if not os.path.exists('figures'):
                             os.makedirs('figures')
-                        plt.savefig("figures/{}{}_{}.png".format(prefix, key, cov_key))
+                        if not os.path.exists(os.path.join("figures", folder)):
+                            os.makedirs(os.path.join("figures", folder))
+                        plt.savefig(os.path.join("figures", folder, "{}{}_{}.png".format(prefix, key, cov_key)))
                         plt.close()
 
-def monte_carlo():
+def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
     np.random.seed(123)
     coverage_est = {}
     coverage_lr = {}
@@ -80,6 +85,8 @@ def monte_carlo():
                     true_coef = np.hstack([np.arange(p).reshape(-1, 1), np.ones((p, 1)), np.zeros((p, d_x-1))])
                     true_effect = lambda x: np.hstack([np.ones((x.shape[0], 1)), x[:, :d_x]]) @ true_coef.T
                     y = true_effect(X)*T.reshape(-1, 1) + X[:, [0]*p] + (1*X[:, [0]] + 1)*np.random.normal(0, 1, size=(n,p))
+                    if p==1:
+                        y = y.ravel()
                     XT = np.hstack([X, T.reshape(-1, 1)])
                     X1, X2, y1, y2, X_final_first, X_final_sec, y_sum_first, y_sum_sec, n_sum_first, n_sum_sec, var_first, var_sec = _summarize(XT, y)
                     X = np.vstack([X1, X2])
@@ -98,8 +105,8 @@ def monte_carlo():
                                 return [(np.arange(0, first_half_sum), np.arange(first_half_sum, X.shape[0])), 
                                         (np.arange(first_half_sum, X.shape[0]), np.arange(0, first_half_sum))]
 
-                        est = LinearDMLCateEstimator(model_y = LinearRegression(),
-                                            model_t = LinearRegression(),
+                        est = LinearDMLCateEstimator(model_y=first_stage(),
+                                            model_t=first_stage(),
                                             n_splits=SplitterSum(),
                                             linear_first_stages=False,
                                             discrete_treatment=False).fit(y_sum,
@@ -116,8 +123,8 @@ def monte_carlo():
                                 return [(np.arange(0, first_half), np.arange(first_half, X.shape[0])), 
                                         (np.arange(first_half, X.shape[0]), np.arange(0, first_half))]
 
-                        lr = LinearDMLCateEstimator(model_y = LinearRegression(),
-                                            model_t = LinearRegression(),
+                        lr = LinearDMLCateEstimator(model_y=first_stage(),
+                                            model_t=first_stage(),
                                             n_splits=Splitter(),
                                             linear_first_stages=False,
                                             discrete_treatment=False).fit(y, X[:, -1], X[:, :d_x], X[:, d_x:-1],
@@ -129,10 +136,12 @@ def monte_carlo():
                             if it==n_exp-1:
                                 mean_coef_cov = np.mean(coverage_est[key]['coef_cov'])
                                 mean_eff_cov = np.mean(coverage_est[key]['effect_cov'])
-                                print("{}. Time: {:.2f}, Mean Coef Cov: {:.4f}, Mean Effect Cov: {:.4f}".format(key,
+                                mean_coef_cov_lr = np.mean(coverage_lr[key]['coef_cov'])
+                                mean_eff_cov_lr = np.mean(coverage_lr[key]['effect_cov'])
+                                print("{}. Time: {:.2f}, Mean Coef Cov: ({:.4f}, {:.4f}), Mean Effect Cov: ({:.4f}, {:.4f})".format(key,
                                                                                                   time.time() - t0,
-                                                                                                  mean_coef_cov,
-                                                                                                  mean_eff_cov))
+                                                                                                  mean_coef_cov, mean_coef_cov_lr,
+                                                                                                  mean_eff_cov, mean_coef_cov_lr))
                                 coef_cov_dev = mean_coef_cov - (1-alpha)
                                 if np.abs(coef_cov_dev) >= .04:
                                     print("BAD coef coverage on average: deviation = {:.4f}".format(coef_cov_dev))
@@ -144,10 +153,16 @@ def monte_carlo():
     agg_coverage_est = _agg_coverage(coverage_est)
     agg_coverage_lr = _agg_coverage(coverage_lr)
  
-    plot_coverage(agg_coverage_est, 'coef_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_")
-    plot_coverage(agg_coverage_lr, 'coef_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_")
-    plot_coverage(agg_coverage_est, 'effect_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_")
-    plot_coverage(agg_coverage_lr, 'effect_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_")
+    plot_coverage(agg_coverage_est, 'coef_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
+    plot_coverage(agg_coverage_lr, 'coef_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
+    plot_coverage(agg_coverage_est, 'effect_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
+    plot_coverage(agg_coverage_lr, 'effect_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
 
 if __name__ == "__main__":
-    monte_carlo()
+    parser = argparse.ArgumentParser(description='Description of your program')
+    parser.add_argument('-e','--exp', help='What experiment (default=all)', required=False, default='all')
+    args = vars(parser.parse_args())
+    if args['exp'] in ['lr', 'all']:
+        monte_carlo()
+    if args['exp'] in ['lasso', 'all']:
+        monte_carlo(first_stage=lambda : WeightedModelWrapper(Lasso(alpha=0.05, fit_intercept=False)), folder='lasso')
