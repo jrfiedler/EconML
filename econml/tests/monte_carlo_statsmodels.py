@@ -63,7 +63,7 @@ def monte_carlo():
     d_list = [1, 10]
     d_x_list = [1, 5]
     p_list = [1, 5]
-    n_exp = 10
+    n_exp = 10000
     cov_type_list = ['nonrobust', 'HC0', 'HC1'] 
     alpha_list = [.01, .05, .2]
     for d in d_list:
