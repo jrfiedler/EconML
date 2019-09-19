@@ -141,7 +141,7 @@ def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
                                 print("{}. Time: {:.2f}, Mean Coef Cov: ({:.4f}, {:.4f}), Mean Effect Cov: ({:.4f}, {:.4f})".format(key,
                                                                                                   time.time() - t0,
                                                                                                   mean_coef_cov, mean_coef_cov_lr,
-                                                                                                  mean_eff_cov, mean_coef_cov_lr))
+                                                                                                  mean_eff_cov, mean_eff_cov_lr))
                                 coef_cov_dev = mean_coef_cov - (1-alpha)
                                 if np.abs(coef_cov_dev) >= .04:
                                     print("BAD coef coverage on average: deviation = {:.4f}".format(coef_cov_dev))
@@ -165,4 +165,4 @@ if __name__ == "__main__":
     if args['exp'] in ['lr', 'all']:
         monte_carlo()
     if args['exp'] in ['lasso', 'all']:
-        monte_carlo(first_stage=lambda : WeightedModelWrapper(Lasso(alpha=0.05, fit_intercept=False)), folder='lasso')
+        monte_carlo(first_stage=lambda : WeightedModelWrapper(Lasso(alpha=0.05, fit_intercept=False, tol=1e-6, random_state=123)), folder='lasso')
