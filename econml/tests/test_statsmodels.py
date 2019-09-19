@@ -79,12 +79,12 @@ def _summarize(X, y):
 
     return X1, X2, y1, y2, X_final_first, X_final_sec, y_sum_first, y_sum_sec, n_sum_first, n_sum_sec, var_first, var_sec
 
-def _compare_dml_classes(est, lr, X_test, alpha=.05):
-    assert np.all(np.abs(est.coef_ - lr.coef_) < 1e-12), "{}, {}".format(est.coef_, lr.coef_)
-    assert np.all(np.abs(np.array(est.coef__interval(alpha=alpha)) - np.array(lr.coef__interval(alpha=alpha))) < 1e-10),\
+def _compare_dml_classes(est, lr, X_test, alpha=.05, tol=1e-10):
+    assert np.all(np.abs(est.coef_ - lr.coef_) < tol), "{}, {}".format(est.coef_, lr.coef_)
+    assert np.all(np.abs(np.array(est.coef__interval(alpha=alpha)) - np.array(lr.coef__interval(alpha=alpha))) < tol),\
             "{}, {}".format(np.array(est.coef__interval(alpha=alpha)), np.array(lr.coef__interval(alpha=alpha)))
-    assert np.all(np.abs(est.effect(X_test) - lr.effect(X_test)) < 1e-12), "{}, {}".format(est.effect(X_test), lr.effect(X_test))
-    assert np.all(np.abs(np.array(est.effect_interval(X_test, alpha=alpha)) - np.array(lr.effect_interval(X_test, alpha=alpha))) < 1e-10),\
+    assert np.all(np.abs(est.effect(X_test) - lr.effect(X_test)) < tol), "{}, {}".format(est.effect(X_test), lr.effect(X_test))
+    assert np.all(np.abs(np.array(est.effect_interval(X_test, alpha=alpha)) - np.array(lr.effect_interval(X_test, alpha=alpha))) < tol),\
             "{}, {}".format(est.effect_interval(X_test, alpha=alpha), lr.effect_interval(X_test, alpha=alpha))
 
 
@@ -447,6 +447,8 @@ class TestStatsModels(unittest.TestCase):
         from econml.dml import LinearDMLCateEstimator
         from econml.inference import StatsModelsInference
         from econml.utilities import WeightedModelWrapper
+
+        first_stage_model = lambda: Lasso(alpha=0.01, fit_intercept=False, tol=1e-12, random_state=123)
         n = 100
         for d in [1, 5]:
             for p in [1, 5]:
@@ -478,8 +480,8 @@ class TestStatsModels(unittest.TestCase):
                                 return [(np.arange(0, first_half_sum), np.arange(first_half_sum, X.shape[0])), 
                                         (np.arange(first_half_sum, X.shape[0]), np.arange(0, first_half_sum))]
                         
-                        est = LinearDMLCateEstimator(model_y = WeightedModelWrapper(Lasso(alpha=0.01, fit_intercept=False)),
-                                            model_t = WeightedModelWrapper(Lasso(alpha=0.01, fit_intercept=False)),
+                        est = LinearDMLCateEstimator(model_y = WeightedModelWrapper(first_stage_model()),
+                                            model_t = WeightedModelWrapper(first_stage_model()),
                                             n_splits=SplitterSum(),
                                             linear_first_stages=False,
                                             discrete_treatment=False).fit(y_sum, X_final[:, -1], X_final[:, :-1], None, sample_weight=n_sum,
@@ -492,8 +494,8 @@ class TestStatsModels(unittest.TestCase):
                                 return [(np.arange(0, first_half), np.arange(first_half, X.shape[0])), 
                                         (np.arange(first_half, X.shape[0]), np.arange(0, first_half))]
                         
-                        lr = LinearDMLCateEstimator(model_y = Lasso(alpha=0.01, fit_intercept=False),
-                                            model_t = Lasso(alpha=0.01, fit_intercept=False),
+                        lr = LinearDMLCateEstimator(model_y = first_stage_model(),
+                                            model_t = first_stage_model(),
                                             n_splits=Splitter(),
                                             linear_first_stages=False,
                                             discrete_treatment=False).fit(y, X[:, -1], X[:, :-1], None,
@@ -502,8 +504,8 @@ class TestStatsModels(unittest.TestCase):
                         _compare_dml_classes(est, lr, X_test, alpha=alpha)
 
                         if p==1:
-                            lr = LinearDMLCateEstimator(model_y = LinearRegression(),
-                                                model_t = LinearRegression(),
+                            lr = LinearDMLCateEstimator(model_y = first_stage_model(),
+                                                model_t = first_stage_model(),
                                                 model_final = StatsModelsOLS(fit_intercept=False),
                                                 n_splits=Splitter(),
                                                 linear_first_stages=False,
