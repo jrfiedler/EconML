@@ -6,6 +6,7 @@ from econml.tests.test_statsmodels import _summarize
 from statsmodels.tools.tools import add_constant
 import matplotlib.pyplot as plt
 import os
+import time
 
 def _coverage_profile(est, X_test, alpha, true_coef, true_effect):
     cov = {}
@@ -36,7 +37,7 @@ def _agg_coverage(coverage):
             mean_coverage_est[key][cov_key] = np.mean(cov_list, axis=0)
     return mean_coverage_est
 
-def plot_coverage(coverage, cov_key, d_list, d_x_list, p_list, cov_type_list, alpha_list, print_matrix=False):
+def plot_coverage(coverage, cov_key, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="", print_matrix=False):
     for d in d_list:
         for d_x in d_x_list:
             if d_x > d:
@@ -48,19 +49,19 @@ def plot_coverage(coverage, cov_key, d_list, d_x_list, p_list, cov_type_list, al
                         if print_matrix:
                             print(coverage[key][cov_key])
                         plt.figure()
-                        plt.title("{}_{}".format(key, cov_key))
+                        plt.title("{}{}_{}".format(prefix, key, cov_key))
                         plt.hist(coverage[key][cov_key].flatten())
                         if not os.path.exists('figures'):
                             os.makedirs('figures')
-                        plt.savefig("figures/{}_{}.png".format(key, cov_key))
+                        plt.savefig("figures/{}{}_{}.png".format(prefix, key, cov_key))
                         plt.close()
 
 def monte_carlo():
-    
+    np.random.seed(123)
     coverage_est = {}
     coverage_lr = {}
     n = 500
-    d_list = [1, 10]
+    d_list = [1, 10, 20]
     d_x_list = [1, 5]
     p_list = [1, 5]
     n_exp = 10000
@@ -72,6 +73,7 @@ def monte_carlo():
                 continue
             for p in p_list:
                 X_test = np.unique(np.random.binomial(1, .5, size=(100, d_x)), axis=0)
+                t0 = time.time()
                 for it in range(n_exp):
                     X = np.random.binomial(1, .8, size=(n, d))
                     T = np.random.binomial(1, .5*X[:, 0]+.25, size=(n,))
@@ -124,14 +126,28 @@ def monte_carlo():
                             key = "d_{}_d_x_{}_p_{}_cov_type_{}_alpha_{}".format(d, d_x, p, cov_type, alpha)
                             _append_coverage(key, coverage_est, est, X_test, alpha, true_coef, true_effect)
                             _append_coverage(key, coverage_lr, lr, X_test, alpha, true_coef, true_effect)
+                            if it==n_exp-1:
+                                mean_coef_cov = np.mean(coverage_est[key]['coef_cov'])
+                                mean_eff_cov = np.mean(coverage_est[key]['effect_cov'])
+                                print("{}. Time: {:.2f}, Mean Coef Cov: {:.4f}, Mean Effect Cov: {:.4f}".format(key,
+                                                                                                  time.time() - t0,
+                                                                                                  mean_coef_cov,
+                                                                                                  mean_eff_cov))
+                                coef_cov_dev = mean_coef_cov - (1-alpha)
+                                if np.abs(coef_cov_dev) >= .04:
+                                    print("BAD coef coverage on average: deviation = {:.4f}".format(coef_cov_dev))
+                                eff_cov_dev = mean_eff_cov - (1-alpha)
+                                if np.abs(eff_cov_dev) >= .04:
+                                    print("BAD effect coverage on average: deviation = {:.4f}".format(eff_cov_dev))
+                                                                                    
 
     agg_coverage_est = _agg_coverage(coverage_est)
     agg_coverage_lr = _agg_coverage(coverage_lr)
  
-    plot_coverage(agg_coverage_est, 'coef_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list)
-    plot_coverage(agg_coverage_lr, 'coef_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list)
-    plot_coverage(agg_coverage_est, 'effect_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list)
-    plot_coverage(agg_coverage_lr, 'effect_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list)
+    plot_coverage(agg_coverage_est, 'coef_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_")
+    plot_coverage(agg_coverage_lr, 'coef_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_")
+    plot_coverage(agg_coverage_est, 'effect_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_")
+    plot_coverage(agg_coverage_lr, 'effect_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_")
 
 if __name__ == "__main__":
     monte_carlo()
