@@ -10,6 +10,7 @@ import os
 import time
 import argparse
 import warnings
+import joblib
 
 def _coverage_profile(est, X_test, alpha, true_coef, true_effect):
     cov = {}
@@ -40,129 +41,149 @@ def _agg_coverage(coverage):
             mean_coverage_est[key][cov_key] = np.mean(cov_list, axis=0)
     return mean_coverage_est
 
-def plot_coverage(coverage, cov_key, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="", folder="", print_matrix=False):
-    for d in d_list:
-        for d_x in d_x_list:
-            if d_x > d:
-                continue
-            for p in p_list:
-                for cov_type in cov_type_list:
-                    for alpha in alpha_list:
-                        key = "d_{}_d_x_{}_p_{}_cov_type_{}_alpha_{}".format(d, d_x, p, cov_type, alpha)
-                        if print_matrix:
-                            print(coverage[key][cov_key])
-                        plt.figure()
-                        plt.title("{}{}_{}".format(prefix, key, cov_key))
-                        plt.hist(coverage[key][cov_key].flatten())
-                        if not os.path.exists('figures'):
-                            os.makedirs('figures')
-                        if not os.path.exists(os.path.join("figures", folder)):
-                            os.makedirs(os.path.join("figures", folder))
-                        plt.savefig(os.path.join("figures", folder, "{}{}_{}.png".format(prefix, key, cov_key)))
-                        plt.close()
+def plot_coverage(coverage, cov_key,  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="", folder="", print_matrix=False):
+    if not os.path.exists('figures'):
+        os.makedirs('figures')
+    if not os.path.exists(os.path.join("figures", folder)):
+        os.makedirs(os.path.join("figures", folder))
+    joblib.dump(coverage, os.path.join("figures", folder, "{}data.jbl".format(prefix)))
+    for hetero_coef in hetero_coef_list:
+        for d in d_list:
+            for d_x in d_x_list:
+                if d_x > d:
+                    continue
+                for p in p_list:
+                    for cov_type in cov_type_list:
+                        for alpha in alpha_list:
+                            key = "hetero_{}_d_{}_d_x_{}_p_{}_cov_type_{}_alpha_{}".format(hetero_coef, d, d_x, p, cov_type, alpha)
+                            if print_matrix:
+                                print(coverage[key][cov_key])
+                            plt.figure()
+                            plt.title("{}{}_{}".format(prefix, key, cov_key))
+                            plt.hist(coverage[key][cov_key].flatten())
+                            plt.savefig(os.path.join("figures", folder, "{}{}_{}.png".format(prefix, key, cov_key)))
+                            plt.close()
 
-def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
+def run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list):
     np.random.seed(123)
     coverage_est = {}
     coverage_lr = {}
-    n = 500
-    d_list = [1, 10, 20]
-    d_x_list = [1, 5]
-    p_list = [1, 5]
-    n_exp = 10000
-    cov_type_list = ['nonrobust', 'HC0', 'HC1'] 
-    alpha_list = [.01, .05, .2]
-    for d in d_list:
-        for d_x in d_x_list:
-            if d_x > d:
-                continue
-            for p in p_list:
-                X_test = np.unique(np.random.binomial(1, .5, size=(100, d_x)), axis=0)
-                t0 = time.time()
-                for it in range(n_exp):
-                    X = np.random.binomial(1, .8, size=(n, d))
-                    T = np.random.binomial(1, .5*X[:, 0]+.25, size=(n,))
-                    true_coef = np.hstack([np.arange(p).reshape(-1, 1), np.ones((p, 1)), np.zeros((p, d_x-1))])
-                    true_effect = lambda x: np.hstack([np.ones((x.shape[0], 1)), x[:, :d_x]]) @ true_coef.T
-                    y = true_effect(X)*T.reshape(-1, 1) + X[:, [0]*p] + (1*X[:, [0]] + 1)*np.random.normal(0, 1, size=(n,p))
-                    if p==1:
-                        y = y.ravel()
-                    XT = np.hstack([X, T.reshape(-1, 1)])
-                    X1, X2, y1, y2, X_final_first, X_final_sec, y_sum_first, y_sum_sec, n_sum_first, n_sum_sec, var_first, var_sec = _summarize(XT, y)
-                    X = np.vstack([X1, X2])
-                    y = np.concatenate((y1, y2))
-                    X_final = np.vstack([X_final_first, X_final_sec])
-                    y_sum = np.concatenate((y_sum_first, y_sum_sec))
-                    n_sum = np.concatenate((n_sum_first, n_sum_sec))
-                    var_sum = np.concatenate((var_first, var_sec))
-                    first_half_sum = len(y_sum_first)
-                    first_half = len(y1)
-                    for cov_type in cov_type_list:
-                        class SplitterSum:
-                            def __init__(self):
-                                return
-                            def split(self, X, T):
-                                return [(np.arange(0, first_half_sum), np.arange(first_half_sum, X.shape[0])), 
-                                        (np.arange(first_half_sum, X.shape[0]), np.arange(0, first_half_sum))]
+    n_tests = 0
+    n_failed_coef = 0
+    n_failed_effect = 0
+    cov_tol = .04
+    for hetero_coef in hetero_coef_list:
+        for d in d_list:
+            for d_x in d_x_list:
+                if d_x > d:
+                    continue
+                for p in p_list:
+                    X_test = np.unique(np.random.binomial(1, .5, size=(100, d_x)), axis=0)
+                    t0 = time.time()
+                    for it in range(n_exp):
+                        X = np.random.binomial(1, .8, size=(n, d))
+                        T = np.random.binomial(1, .5*X[:, 0]+.25, size=(n,))
+                        true_coef = np.hstack([np.arange(p).reshape(-1, 1), np.ones((p, 1)), np.zeros((p, d_x-1))])
+                        true_effect = lambda x: np.hstack([np.ones((x.shape[0], 1)), x[:, :d_x]]) @ true_coef.T
+                        y = true_effect(X)*T.reshape(-1, 1) + X[:, [0]*p] + (hetero_coef*X[:, [0]] + 1)*np.random.normal(0, 1, size=(n,p))
+                        if p==1:
+                            y = y.ravel()
+                        XT = np.hstack([X, T.reshape(-1, 1)])
+                        X1, X2, y1, y2, X_final_first, X_final_sec, y_sum_first, y_sum_sec, n_sum_first, n_sum_sec, var_first, var_sec = _summarize(XT, y)
+                        X = np.vstack([X1, X2])
+                        y = np.concatenate((y1, y2))
+                        X_final = np.vstack([X_final_first, X_final_sec])
+                        y_sum = np.concatenate((y_sum_first, y_sum_sec))
+                        n_sum = np.concatenate((n_sum_first, n_sum_sec))
+                        var_sum = np.concatenate((var_first, var_sec))
+                        first_half_sum = len(y_sum_first)
+                        first_half = len(y1)
+                        for cov_type in cov_type_list:
+                            class SplitterSum:
+                                def __init__(self):
+                                    return
+                                def split(self, X, T):
+                                    return [(np.arange(0, first_half_sum), np.arange(first_half_sum, X.shape[0])), 
+                                            (np.arange(first_half_sum, X.shape[0]), np.arange(0, first_half_sum))]
 
-                        est = LinearDMLCateEstimator(model_y=first_stage(),
-                                            model_t=first_stage(),
-                                            n_splits=SplitterSum(),
-                                            linear_first_stages=False,
-                                            discrete_treatment=False).fit(y_sum,
-                                                                        X_final[:, -1],
-                                                                        X_final[:, :d_x],
-                                                                        X_final[:, d_x:-1],
-                                                                        sample_weight=n_sum,
-                                                                        var_weight=var_sum,
-                                                                        inference=StatsModelsInference(cov_type=cov_type))
-                        class Splitter:
-                            def __init__(self):
-                                return
-                            def split(self, X, T):
-                                return [(np.arange(0, first_half), np.arange(first_half, X.shape[0])), 
-                                        (np.arange(first_half, X.shape[0]), np.arange(0, first_half))]
+                            est = LinearDMLCateEstimator(model_y=first_stage(),
+                                                model_t=first_stage(),
+                                                n_splits=SplitterSum(),
+                                                linear_first_stages=False,
+                                                discrete_treatment=False).fit(y_sum,
+                                                                            X_final[:, -1],
+                                                                            X_final[:, :d_x],
+                                                                            X_final[:, d_x:-1],
+                                                                            sample_weight=n_sum,
+                                                                            var_weight=var_sum,
+                                                                            inference=StatsModelsInference(cov_type=cov_type))
+                            class Splitter:
+                                def __init__(self):
+                                    return
+                                def split(self, X, T):
+                                    return [(np.arange(0, first_half), np.arange(first_half, X.shape[0])), 
+                                            (np.arange(first_half, X.shape[0]), np.arange(0, first_half))]
 
-                        lr = LinearDMLCateEstimator(model_y=first_stage(),
-                                            model_t=first_stage(),
-                                            n_splits=Splitter(),
-                                            linear_first_stages=False,
-                                            discrete_treatment=False).fit(y, X[:, -1], X[:, :d_x], X[:, d_x:-1],
-                                                                        inference=StatsModelsInference(cov_type=cov_type))
-                        for alpha in alpha_list:
-                            key = "d_{}_d_x_{}_p_{}_cov_type_{}_alpha_{}".format(d, d_x, p, cov_type, alpha)
-                            _append_coverage(key, coverage_est, est, X_test, alpha, true_coef, true_effect)
-                            _append_coverage(key, coverage_lr, lr, X_test, alpha, true_coef, true_effect)
-                            if it==n_exp-1:
-                                mean_coef_cov = np.mean(coverage_est[key]['coef_cov'])
-                                mean_eff_cov = np.mean(coverage_est[key]['effect_cov'])
-                                mean_coef_cov_lr = np.mean(coverage_lr[key]['coef_cov'])
-                                mean_eff_cov_lr = np.mean(coverage_lr[key]['effect_cov'])
-                                print("{}. Time: {:.2f}, Mean Coef Cov: ({:.4f}, {:.4f}), Mean Effect Cov: ({:.4f}, {:.4f})".format(key,
-                                                                                                  time.time() - t0,
-                                                                                                  mean_coef_cov, mean_coef_cov_lr,
-                                                                                                  mean_eff_cov, mean_eff_cov_lr))
-                                coef_cov_dev = mean_coef_cov - (1-alpha)
-                                if np.abs(coef_cov_dev) >= .04:
-                                    print("BAD coef coverage on average: deviation = {:.4f}".format(coef_cov_dev))
-                                eff_cov_dev = mean_eff_cov - (1-alpha)
-                                if np.abs(eff_cov_dev) >= .04:
-                                    print("BAD effect coverage on average: deviation = {:.4f}".format(eff_cov_dev))
-                                                                                    
+                            lr = LinearDMLCateEstimator(model_y=first_stage(),
+                                                model_t=first_stage(),
+                                                n_splits=Splitter(),
+                                                linear_first_stages=False,
+                                                discrete_treatment=False).fit(y, X[:, -1], X[:, :d_x], X[:, d_x:-1],
+                                                                            inference=StatsModelsInference(cov_type=cov_type))
+                            for alpha in alpha_list:
+                                key = "hetero_{}_d_{}_d_x_{}_p_{}_cov_type_{}_alpha_{}".format(hetero_coef, d, d_x, p, cov_type, alpha)
+                                _append_coverage(key, coverage_est, est, X_test, alpha, true_coef, true_effect)
+                                _append_coverage(key, coverage_lr, lr, X_test, alpha, true_coef, true_effect)
+                                if it==n_exp-1:
+                                    n_tests += 1
+                                    mean_coef_cov = np.mean(coverage_est[key]['coef_cov'])
+                                    mean_eff_cov = np.mean(coverage_est[key]['effect_cov'])
+                                    mean_coef_cov_lr = np.mean(coverage_lr[key]['coef_cov'])
+                                    mean_eff_cov_lr = np.mean(coverage_lr[key]['effect_cov'])
+                                    print("{}. Time: {:.2f}, Mean Coef Cov: ({:.4f}, {:.4f}), Mean Effect Cov: ({:.4f}, {:.4f})".format(key,
+                                                                                                    time.time() - t0,
+                                                                                                    mean_coef_cov, mean_coef_cov_lr,
+                                                                                                    mean_eff_cov, mean_eff_cov_lr))
+                                    coef_cov_dev = mean_coef_cov - (1-alpha)
+                                    if np.abs(coef_cov_dev) >= cov_tol:
+                                        n_failed_coef += 1
+                                        print("BAD coef coverage on average: deviation = {:.4f}".format(coef_cov_dev))
+                                    eff_cov_dev = mean_eff_cov - (1-alpha)
+                                    if np.abs(eff_cov_dev) >= cov_tol:
+                                        n_failed_effect += 1
+                                        print("BAD effect coverage on average: deviation = {:.4f}".format(eff_cov_dev))
+    print("Finished {} Monte Carlo Tests. Failed Coef Coverage Tests: {}/{}. Failed Effect Coverage Tests: {}/{}. (Coverage Tolerance={})".format(n_tests,
+                                                                                                                                                  n_failed_coef,
+                                                                                                                                                  n_tests,
+                                                                                                                                                  n_failed_effect,
+                                                                                                                                                  n_tests,
+                                                                                                                                                  cov_tol))
 
     agg_coverage_est = _agg_coverage(coverage_est)
     agg_coverage_lr = _agg_coverage(coverage_lr)
- 
-    plot_coverage(agg_coverage_est, 'coef_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
-    plot_coverage(agg_coverage_lr, 'coef_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
-    plot_coverage(agg_coverage_est, 'effect_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
-    plot_coverage(agg_coverage_lr, 'effect_cov', d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
+
+    plot_coverage(agg_coverage_est, 'coef_cov', hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
+    plot_coverage(agg_coverage_lr, 'coef_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
+    plot_coverage(agg_coverage_est, 'effect_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
+    plot_coverage(agg_coverage_lr, 'effect_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
+
+def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
+    n = 500
+    n_exp = 10000
+    hetero_coef_list = [0, 1]
+    d_list = [1, 10, 20]
+    d_x_list = [1, 5]
+    p_list = [1, 5]
+    cov_type_list = ['nonrobust', 'HC0', 'HC1']
+    alpha_list = [.01, .05, .2]
+    run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list)
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Description of your program')
     parser.add_argument('-e','--exp', help='What experiment (default=all)', required=False, default='all')
     args = vars(parser.parse_args())
     if args['exp'] in ['lr', 'all']:
-        monte_carlo()
+        monte_carlo(folder="lr")
     if args['exp'] in ['lasso', 'all']:
         monte_carlo(first_stage=lambda : WeightedModelWrapper(Lasso(alpha=0.05, fit_intercept=False, tol=1e-6, random_state=123)), folder='lasso')
