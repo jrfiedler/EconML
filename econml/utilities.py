@@ -1244,5 +1244,5 @@ class WeightedSplitter:
         folds = []
         all_samples = np.arange(X.shape[0])
         for it in range(self._n_splits):
-            folds.append([splits[it], np.setdiff1d(all_samples, splits[it])])
+            folds.append([np.setdiff1d(all_samples, splits[it]), splits[it]])
         return folds
