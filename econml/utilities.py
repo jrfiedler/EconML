@@ -17,6 +17,7 @@ from statsmodels.regression.linear_model import WLS, OLS
 from statsmodels.genmod.generalized_linear_model import GLM
 from statsmodels.tools.tools import add_constant
 import warnings
+from sklearn.model_selection import KFold
 
 MAX_RAND_SEED = np.iinfo(np.int32).max
 
@@ -1230,7 +1231,7 @@ class WeightedSplitter:
 
     def split(self, X, y, sample_weight=None):
         if sample_weight is None:
-            sample_weight = np.ones(X.shape[0])
+            return KFold(n_splits=self._n_splits).split(X, y)
         if np.any(np.not_equal(np.mod(sample_weight, 1), 0)):
             sample_weight = np.round(sample_weight / self._weight_precision)
         total_sum = np.sum(sample_weight)
