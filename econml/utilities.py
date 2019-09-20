@@ -1184,9 +1184,10 @@ class LassoCVWrapper:
         return self.model.predict(X)
 
 class WeightedSplitter:
-    def __init__(self, n_splits=2, tol=1e-1):
+    def __init__(self, n_splits=2, tol=1e-1, weight_precision=1e-2):
         self._n_splits = n_splits
         self._tol = tol
+        self._weight_precision = weight_precision
         return
 
     def _trim(self, L, delta):
@@ -1230,6 +1231,8 @@ class WeightedSplitter:
     def split(self, X, y, sample_weight=None):
         if sample_weight is None:
             sample_weight = np.ones(X.shape[0])
+        if np.any(np.not_equal(np.mod(sample_weight, 1), 0)):
+            sample_weight = np.round(sample_weight / self._weight_precision)
         total_sum = np.sum(sample_weight)
         splits = []
         remaining_samples = np.arange(X.shape[0])
