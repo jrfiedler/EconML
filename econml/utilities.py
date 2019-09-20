@@ -1182,3 +1182,64 @@ class LassoCVWrapper:
 
     def predict(self, X):
         return self.model.predict(X)
+
+class WeightedSplitter:
+    def __init__(self, n_splits=2, tol=1e-1):
+        self._n_splits = n_splits
+        self._tol = tol
+        return
+
+    def _trim(self, L, delta):
+        new_L = [L[0]]
+        last = L[0][0]
+        for i in np.arange(1, len(L)):
+            if last < (1-delta) * L[i][0]:
+                new_L.append(L[i])
+                last = L[i][0]
+        return np.array(new_L)
+
+    def _merge_sorted(self, L1, L2):
+        new_L = []
+        it1 = 0
+        it2 = 0
+        for _ in range(len(L1) + len(L2)):
+            if L1[it1][0] < L2[it2][0]:
+                new_L.append(L1[it1])
+                it1 += 1
+                if it1 == len(L1):
+                    new_L.extend(L2[it2:])
+                    break
+            else:
+                new_L.append(L2[it2])
+                it2 += 1
+                if it2 == len(L2):
+                    new_L.extend(L1[it1:])
+                    break
+        return np.array(new_L)
+
+    def _approx_subset_sum(self, S, t, epsilon):
+        n = len(S)
+        Li = np.array([(0, [])])
+        for i in range(n):
+            add_i = np.array([(t[0]+S[i], t[1]+[i]) for t in Li])
+            Li = self._merge_sorted(Li, add_i)
+            Li = self._trim(Li, epsilon/n)
+            Li = np.array([x for x in Li if x[0] <= t])
+        return Li[-1]
+
+    def split(self, X, y, sample_weight=None):
+        if sample_weight is None:
+            sample_weight = np.ones(X.shape[0])
+        total_sum = np.sum(sample_weight)
+        splits = []
+        remaining_samples = np.arange(X.shape[0])
+        for it in range(self._n_splits-1):
+            new_split = remaining_samples[self._approx_subset_sum(sample_weight[remaining_samples], total_sum/self._n_splits, self._tol)[1]]
+            remaining_samples = np.setdiff1d(remaining_samples, new_split)
+            splits.append(new_split)
+        splits.append(remaining_samples)
+        folds = []
+        all_samples = np.arange(X.shape[0])
+        for it in range(self._n_splits):
+            folds.append([splits[it], np.setdiff1d(all_samples, splits[it])])
+        return folds
