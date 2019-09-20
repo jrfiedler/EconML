@@ -520,7 +520,7 @@ class TestStatsModels(unittest.TestCase):
         from econml.utilities import WeightedModelWrapper
 
         first_stage_model = lambda: RandomForestRegressor(n_estimators=10, bootstrap=False, random_state=123)
-        n = 100
+        n = 1000
         for d in [1, 5]:
             for p in [1, 5]:
                 for cov_type in ['nonrobust', 'HC0', 'HC1']:
@@ -551,8 +551,8 @@ class TestStatsModels(unittest.TestCase):
                                 return [(np.arange(0, first_half_sum), np.arange(first_half_sum, X.shape[0])), 
                                         (np.arange(first_half_sum, X.shape[0]), np.arange(0, first_half_sum))]
                         
-                        est = LinearDMLCateEstimator(model_y = WeightedModelWrapper(first_stage_model()),
-                                            model_t = WeightedModelWrapper(first_stage_model()),
+                        est = LinearDMLCateEstimator(model_y = first_stage_model(),
+                                            model_t = first_stage_model(),
                                             n_splits=SplitterSum(),
                                             linear_first_stages=False,
                                             discrete_treatment=False).fit(y_sum, X_final[:, -1], X_final[:, :-1], None, sample_weight=n_sum,
