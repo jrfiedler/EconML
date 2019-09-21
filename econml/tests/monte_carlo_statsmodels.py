@@ -4,7 +4,7 @@ from sklearn.linear_model import LinearRegression, MultiTaskLassoCV, MultiTaskLa
 from econml.inference import StatsModelsInference
 from econml.tests.test_statsmodels import _summarize
 from econml.utilities import WeightedModelWrapper, LassoCVWrapper, WeightedLasso, GridSearchCVList
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from statsmodels.tools.tools import add_constant
 import matplotlib.pyplot as plt
 import os
@@ -243,11 +243,12 @@ def monte_carlo_rf(first_stage=lambda : RandomForestRegressor(n_estimators=100, 
 def monte_carlo_gcv(folder='gcv'):
     first_stage = lambda : GridSearchCVList([LinearRegression(),
                                              WeightedLasso(alpha=0.05, fit_intercept=False, tol=1e-6, random_state=123),
-                                             RandomForestRegressor(n_estimators=100, max_depth=3, min_samples_leaf=10, random_state=123)],
-                                             param_grid_list=[{}, {}, {}],
+                                             RandomForestRegressor(n_estimators=100, max_depth=3, min_samples_leaf=10, random_state=123),
+                                             GradientBoostingRegressor(n_estimators=30, max_depth=3, min_samples_leaf=10, random_state=123)],
+                                             param_grid_list=[{}, {}, {}, {}],
                                              cv=3,
                                              iid=True)
-    n = 500
+    n = 1000
     n_exp = 1000
     hetero_coef_list = [1]
     d_list = [20]
