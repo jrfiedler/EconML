@@ -4,6 +4,7 @@ from sklearn.linear_model import LinearRegression, MultiTaskLassoCV, MultiTaskLa
 from econml.inference import StatsModelsInference
 from econml.tests.test_statsmodels import _summarize
 from econml.utilities import WeightedModelWrapper, LassoCVWrapper
+from sklearn.ensemble import RandomForestRegressor
 from statsmodels.tools.tools import add_constant
 import matplotlib.pyplot as plt
 import os
@@ -15,10 +16,20 @@ import joblib
 def _coverage_profile(est, X_test, alpha, true_coef, true_effect):
     cov = {}
     coef_interval = est.coef__interval(alpha=alpha)
+    cov['coef'] = est.coef_
+    cov['coef_lower'] = coef_interval[0]
+    cov['coef_upper'] = coef_interval[1]
+    cov['true_coef'] = true_coef
+    cov['coef_stderr'] = est._model_final._model.coef_stderr_
+    cov['coef_sqerror'] = (est.coef_ - true_coef)**2
     cov['coef_cov'] = (true_coef >= coef_interval[0]) & (true_coef <= coef_interval[1])
     cov['coef_length'] = coef_interval[1] - coef_interval[0]
     effect_interval = est.effect_interval(X_test, alpha=alpha)
     true_eff = true_effect(X_test).reshape(effect_interval[0].shape)
+    est_effect = est.effect(X_test)
+    cov['effect'] = est_effect
+    cov['true_effect'] = true_eff
+    cov['effect_sqerror'] = (est_effect - true_eff)**2
     cov['effect_cov'] = (true_eff >= effect_interval[0]) & (true_eff <= effect_interval[1])
     cov['effect_length'] = effect_interval[1] - effect_interval[0]
     return cov
@@ -33,13 +44,20 @@ def _append_coverage(key, coverage, est, X_test, alpha, true_coef, true_effect):
         for cov_key, value in cov.items():
             coverage[key][cov_key].append(value)
 
-def _agg_coverage(coverage):
+def _agg_coverage(coverage, qs=np.array([.005, .025, .1, .9, .975, .995])):
     mean_coverage_est = {}
+    std_coverage_est = {}
+    q_coverage_est = {}
     for key, cov_dict in coverage.items():
         mean_coverage_est[key] = {}
+        std_coverage_est[key] = {}
+        q_coverage_est[key] = {}
         for cov_key, cov_list in cov_dict.items():
             mean_coverage_est[key][cov_key] = np.mean(cov_list, axis=0)
-    return mean_coverage_est
+            std_coverage_est[key][cov_key] = np.std(cov_list, axis=0)
+            q_coverage_est[key][cov_key] = np.percentile(cov_list, qs*100, axis=0)
+    return mean_coverage_est, std_coverage_est, q_coverage_est
+
 
 def plot_coverage(coverage, cov_key,  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="", folder="", print_matrix=False):
     if not os.path.exists('figures'):
@@ -63,6 +81,19 @@ def plot_coverage(coverage, cov_key,  hetero_coef_list, d_list, d_x_list, p_list
                             plt.hist(coverage[key][cov_key].flatten())
                             plt.savefig(os.path.join("figures", folder, "{}{}_{}.png".format(prefix, key, cov_key)))
                             plt.close()
+
+def print_aggregate(mean_coverage, std_coverage, q_coverage):
+    for key, cov in mean_coverage.items():
+        print(key)
+        print("Mean Coef [Mean Lower, Mean Upper] (True):\r\n{}".format("\r\n".join(["{} [{}, {}] ({})".format(est, lower, upper, true) 
+                                                        for est, lower, upper, true
+                                                        in zip(cov['coef'], cov['coef_lower'], cov['coef_upper'], cov['true_coef'])])))
+        print("Mean Coef SqError: {}".format(cov['coef_sqerror']))
+        print("Effect SqError: {}".format(np.mean(cov['effect_sqerror'])))
+        print("Mean StdErr Coef (True): {} ({})".format(cov['coef_stderr'], std_coverage[key]['coef']))
+        print("Coef Quantiles:\r\n{}".format(q_coverage[key]['coef']))
+
+
 
 def run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list):
     np.random.seed(123)
@@ -88,6 +119,7 @@ def run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list
                         y = true_effect(X)*T.reshape(-1, 1) + X[:, [0]*p] + (hetero_coef*X[:, [0]] + 1)*np.random.normal(0, 1, size=(n,p))
                         if p==1:
                             y = y.ravel()
+                            true_coef = true_coef.ravel()
                         XT = np.hstack([X, T.reshape(-1, 1)])
                         X1, X2, y1, y2, X_final_first, X_final_sec, y_sum_first, y_sum_sec, n_sum_first, n_sum_sec, var_first, var_sec = _summarize(XT, y)
                         X = np.vstack([X1, X2])
@@ -159,13 +191,15 @@ def run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list
                                                                                                                                                   n_tests,
                                                                                                                                                   cov_tol))
 
-    agg_coverage_est = _agg_coverage(coverage_est)
-    agg_coverage_lr = _agg_coverage(coverage_lr)
+    agg_coverage_est, std_coverage_est, q_coverage_est = _agg_coverage(coverage_est)
+    agg_coverage_lr, std_coverage_lr, q_coverage_lr = _agg_coverage(coverage_lr)
 
     plot_coverage(agg_coverage_est, 'coef_cov', hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
     plot_coverage(agg_coverage_lr, 'coef_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
     plot_coverage(agg_coverage_est, 'effect_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
     plot_coverage(agg_coverage_lr, 'effect_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
+    print_aggregate(agg_coverage_est, std_coverage_est, q_coverage_est)
+    print_aggregate(agg_coverage_lr, std_coverage_lr, q_coverage_lr)
 
 def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
     n = 500
@@ -177,7 +211,17 @@ def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
     cov_type_list = ['nonrobust', 'HC0', 'HC1']
     alpha_list = [.01, .05, .2]
     run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list)
-    
+
+def monte_carlo_rf(first_stage=lambda : RandomForestRegressor(n_estimators=100, max_depth=3, min_samples_leaf=10), folder='rf'):
+    n = 500
+    n_exp = 10000
+    hetero_coef_list = [1]
+    d_list = [20]
+    d_x_list = [5]
+    p_list = [1]
+    cov_type_list = ['HC1']
+    alpha_list = [.01, .05, .2]
+    run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Description of your program')
@@ -187,3 +231,5 @@ if __name__ == "__main__":
         monte_carlo(folder="lr")
     if args['exp'] in ['lasso', 'all']:
         monte_carlo(first_stage=lambda : WeightedModelWrapper(Lasso(alpha=0.05, fit_intercept=False, tol=1e-6, random_state=123)), folder='lasso')
+    if args['exp'] in ['rf', 'all']:
+        monte_carlo_rf()
