@@ -86,13 +86,25 @@ def print_aggregate(mean_coverage, std_coverage, q_coverage):
     for key, cov in mean_coverage.items():
         print(key)
         with np.printoptions(formatter={'float': '{:.4f}'.format}, suppress=True):
-            print("Mean Coef [Mean Lower, Mean Upper] (True):\r\n{}".format("\r\n".join(["{:.4f} [{:.4f}, {:.4f}] ({:.4f})".format(est, lower, upper, true) 
-                                                            for est, lower, upper, true
-                                                            in zip(cov['coef'], cov['coef_lower'], cov['coef_upper'], cov['true_coef'])])))
-            print("Mean Coef SqError: {}".format(cov['coef_sqerror']))
+            print("Mean Coef (True)\t Mean SqErr \t Mean StdErr (True)\t [Mean Lower, Mean Upper]\t (True Quantiles):\r\n{}".format(
+                "\r\n".join(["{:.4f} ({:.4f}) \t {:.4f} \t {:.4f} ({:.4f}) \t [{:.4f}, {:.4f}] \t {}".format(est,
+                                                                                                    true,
+                                                                                                    sqerr,
+                                                                                                    stderr,
+                                                                                                    true_stderr,
+                                                                                                    lower,
+                                                                                                    upper,
+                                                                                                    true_qs) 
+                                                            for est, true, sqerr, stderr, true_stderr, lower, upper, true_qs
+                                                            in zip(cov['coef'],
+                                                                   cov['true_coef'],
+                                                                   cov['coef_sqerror'],
+                                                                   cov['coef_stderr'],
+                                                                   std_coverage[key]['coef'],
+                                                                   cov['coef_lower'],
+                                                                   cov['coef_upper'],
+                                                                   q_coverage[key]['coef'].T)])))
             print("Effect SqError: {}".format(np.mean(cov['effect_sqerror'])))
-            print("Mean StdErr Coef (True): {} ({})".format(cov['coef_stderr'], std_coverage[key]['coef']))
-            print("Coef Quantiles:\r\n{}".format(q_coverage[key]['coef']))
 
 
 
@@ -219,7 +231,7 @@ def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
 
 def monte_carlo_rf(first_stage=lambda : RandomForestRegressor(n_estimators=100, max_depth=3, min_samples_leaf=10), folder='rf'):
     n = 500
-    n_exp = 10000
+    n_exp = 100
     hetero_coef_list = [1]
     d_list = [20]
     d_x_list = [5]
