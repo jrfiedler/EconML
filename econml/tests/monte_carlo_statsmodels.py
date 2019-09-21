@@ -85,13 +85,14 @@ def plot_coverage(coverage, cov_key,  hetero_coef_list, d_list, d_x_list, p_list
 def print_aggregate(mean_coverage, std_coverage, q_coverage):
     for key, cov in mean_coverage.items():
         print(key)
-        print("Mean Coef [Mean Lower, Mean Upper] (True):\r\n{}".format("\r\n".join(["{} [{}, {}] ({})".format(est, lower, upper, true) 
-                                                        for est, lower, upper, true
-                                                        in zip(cov['coef'], cov['coef_lower'], cov['coef_upper'], cov['true_coef'])])))
-        print("Mean Coef SqError: {}".format(cov['coef_sqerror']))
-        print("Effect SqError: {}".format(np.mean(cov['effect_sqerror'])))
-        print("Mean StdErr Coef (True): {} ({})".format(cov['coef_stderr'], std_coverage[key]['coef']))
-        print("Coef Quantiles:\r\n{}".format(q_coverage[key]['coef']))
+        with np.printoptions(formatter={'float': '{:.4f}'.format}, suppress=True):
+            print("Mean Coef [Mean Lower, Mean Upper] (True):\r\n{}".format("\r\n".join(["{:.4f} [{:.4f}, {:.4f}] ({:.4f})".format(est, lower, upper, true) 
+                                                            for est, lower, upper, true
+                                                            in zip(cov['coef'], cov['coef_lower'], cov['coef_upper'], cov['true_coef'])])))
+            print("Mean Coef SqError: {}".format(cov['coef_sqerror']))
+            print("Effect SqError: {}".format(np.mean(cov['effect_sqerror'])))
+            print("Mean StdErr Coef (True): {} ({})".format(cov['coef_stderr'], std_coverage[key]['coef']))
+            print("Coef Quantiles:\r\n{}".format(q_coverage[key]['coef']))
 
 
 
@@ -194,11 +195,15 @@ def run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list
     agg_coverage_est, std_coverage_est, q_coverage_est = _agg_coverage(coverage_est)
     agg_coverage_lr, std_coverage_lr, q_coverage_lr = _agg_coverage(coverage_lr)
 
+    print("\nResults for: {}\n--------------------------\n".format(folder))
     plot_coverage(agg_coverage_est, 'coef_cov', hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
     plot_coverage(agg_coverage_lr, 'coef_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
     plot_coverage(agg_coverage_est, 'effect_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
     plot_coverage(agg_coverage_lr, 'effect_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
+    
+    print("Summarized Data\n----------------")
     print_aggregate(agg_coverage_est, std_coverage_est, q_coverage_est)
+    print("\nUn-Summarized Data\n-----------------")
     print_aggregate(agg_coverage_lr, std_coverage_lr, q_coverage_lr)
 
 def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
