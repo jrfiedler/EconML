@@ -244,8 +244,11 @@ def monte_carlo_gcv(folder='gcv'):
     first_stage = lambda : GridSearchCVList([LinearRegression(),
                                              WeightedLasso(alpha=0.05, fit_intercept=False, tol=1e-6, random_state=123),
                                              RandomForestRegressor(n_estimators=100, max_depth=3, min_samples_leaf=10, random_state=123),
-                                             GradientBoostingRegressor(n_estimators=30, max_depth=3, min_samples_leaf=10, random_state=123)],
-                                             param_grid_list=[{}, {}, {}, {}],
+                                             GradientBoostingRegressor(n_estimators=20, max_depth=3, min_samples_leaf=10, random_state=123)],
+                                             param_grid_list=[{},
+                                                              {},
+                                                              {},
+                                                              {}],
                                              cv=3,
                                              iid=True)
     n = 1000

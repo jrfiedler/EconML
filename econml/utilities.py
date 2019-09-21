@@ -1282,6 +1282,7 @@ class GridSearchCVList:
         self.best_estimator_ = self._gcv_list[self.best_ind_].best_estimator_
         self.best_score_ = self._gcv_list[self.best_ind_].best_score_
         self.best_params_ = self._gcv_list[self.best_ind_].best_params_
+        return self
 
     def predict(self, X):
         return self.best_estimator_.predict(X)
