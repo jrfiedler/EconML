@@ -16,14 +16,14 @@ import joblib
 def _coverage_profile(est, X_test, alpha, true_coef, true_effect):
     cov = {}
     coef_interval = est.coef__interval(alpha=alpha)
-    cov['coef'] = est.coef_
-    cov['coef_lower'] = coef_interval[0]
-    cov['coef_upper'] = coef_interval[1]
-    cov['true_coef'] = true_coef
-    cov['coef_stderr'] = est._model_final._model.coef_stderr_
-    cov['coef_sqerror'] = (est.coef_ - true_coef)**2
-    cov['coef_cov'] = (true_coef >= coef_interval[0]) & (true_coef <= coef_interval[1])
-    cov['coef_length'] = coef_interval[1] - coef_interval[0]
+    cov['coef'] = est.coef_.flatten()
+    cov['coef_lower'] = coef_interval[0].flatten()
+    cov['coef_upper'] = coef_interval[1].flatten()
+    cov['true_coef'] = true_coef.flatten()
+    cov['coef_stderr'] = est._model_final._model.coef_stderr_.flatten()
+    cov['coef_sqerror'] = ((est.coef_ - true_coef)**2).flatten()
+    cov['coef_cov'] = ((true_coef >= coef_interval[0]) & (true_coef <= coef_interval[1])).flatten()
+    cov['coef_length'] = (coef_interval[1] - coef_interval[0]).flatten()
     effect_interval = est.effect_interval(X_test, alpha=alpha)
     true_eff = true_effect(X_test).reshape(effect_interval[0].shape)
     est_effect = est.effect(X_test)
@@ -87,14 +87,14 @@ def print_aggregate(mean_coverage, std_coverage, q_coverage):
         print(key)
         with np.printoptions(formatter={'float': '{:.4f}'.format}, suppress=True):
             print("Mean Coef (True)\t Mean SqErr \t Mean StdErr (True)\t [Mean Lower, Mean Upper]\t (True Quantiles):\r\n{}".format(
-                "\r\n".join(["{:.4f} ({:.4f}) \t {:.4f} \t {:.4f} ({:.4f}) \t [{:.4f}, {:.4f}] \t {}".format(est,
-                                                                                                    true,
-                                                                                                    sqerr,
-                                                                                                    stderr,
-                                                                                                    true_stderr,
-                                                                                                    lower,
-                                                                                                    upper,
-                                                                                                    true_qs) 
+                "\r\n".join(["{} ({}) \t {} \t {} ({}) \t [{}, {}] \t {}".format(est,
+                                                                                true,
+                                                                                sqerr,
+                                                                                stderr,
+                                                                                true_stderr,
+                                                                                lower,
+                                                                                upper,
+                                                                                true_qs) 
                                                             for est, true, sqerr, stderr, true_stderr, lower, upper, true_qs
                                                             in zip(cov['coef'],
                                                                    cov['true_coef'],
@@ -229,6 +229,17 @@ def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
     alpha_list = [.01, .05, .2]
     run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list)
 
+def monte_carlo_lasso(first_stage=lambda : WeightedLasso(alpha=0.05, fit_intercept=True, tol=1e-6, random_state=123), folder='lasso'):
+    n = 500
+    n_exp = 1000
+    hetero_coef_list = [1]
+    d_list = [20]
+    d_x_list = [5]
+    p_list = [3]
+    cov_type_list = ['HC1']
+    alpha_list = [.01, .05, .2]
+    run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list)
+
 def monte_carlo_rf(first_stage=lambda : RandomForestRegressor(n_estimators=100, max_depth=3, min_samples_leaf=10), folder='rf'):
     n = 500
     n_exp = 1000
@@ -242,7 +253,7 @@ def monte_carlo_rf(first_stage=lambda : RandomForestRegressor(n_estimators=100, 
 
 def monte_carlo_gcv(folder='gcv'):
     first_stage = lambda : GridSearchCVList([LinearRegression(),
-                                             WeightedLasso(alpha=0.05, fit_intercept=False, tol=1e-6, random_state=123),
+                                             WeightedLasso(alpha=0.05, fit_intercept=True, tol=1e-6, random_state=123),
                                              RandomForestRegressor(n_estimators=100, max_depth=3, min_samples_leaf=10, random_state=123),
                                              GradientBoostingRegressor(n_estimators=20, max_depth=3, min_samples_leaf=10, random_state=123)],
                                              param_grid_list=[{},
@@ -266,9 +277,9 @@ if __name__ == "__main__":
     parser.add_argument('-e','--exp', help='What experiment (default=all)', required=False, default='all')
     args = vars(parser.parse_args())
     if args['exp'] in ['lr', 'all']:
-        monte_carlo(folder="lr")
+        monte_carlo()
     if args['exp'] in ['lasso', 'all']:
-        monte_carlo(first_stage=lambda : WeightedLasso(alpha=0.05, fit_intercept=False, tol=1e-6, random_state=123), folder='lasso')
+        monte_carlo_lasso()
     if args['exp'] in ['rf', 'all']:
         monte_carlo_rf()
     if args['exp'] in ['gcv', 'all']:

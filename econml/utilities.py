@@ -702,16 +702,31 @@ class WeightedLasso(Lasso):
     def __init__(self, alpha=1.0, fit_intercept=True, normalize=False, precompute=False, 
                  copy_X=True, max_iter=1000, tol=0.0001, warm_start=False, positive=False,
                  random_state=None, selection='cyclic'):
-        super().__init__(alpha=alpha, fit_intercept=fit_intercept, normalize=normalize, precompute=precompute, 
+        super().__init__(alpha=alpha, fit_intercept=False, normalize=normalize, precompute=precompute, 
                  copy_X=copy_X, max_iter=max_iter, tol=tol, warm_start=warm_start, positive=positive,
                  random_state=random_state, selection=selection)
+        self._weighted_fit_intercept = fit_intercept
 
     def fit(self, X, y, sample_weight=None):
         if sample_weight is None:
             sample_weight = np.ones(X.shape[0])
         normalized_weights = sample_weight * X.shape[0] / np.sum(sample_weight)
         sqrt_weights = np.sqrt(normalized_weights)
-        return super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights)
+        if self._weighted_fit_intercept:
+            mean_y = np.average(y, weights=normalized_weights, axis=0)
+            mean_X = np.average(X, weights=normalized_weights, axis=0)
+            if ndim(y) >= 2:
+                y = y - mean_y.reshape(1, -1)
+            else:
+                y = y - mean_y
+            X = X - mean_X.reshape(1, -1)
+        if ndim(y) >= 2:
+            super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights.reshape(-1,1))
+        else:
+            super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights)
+        if self._weighted_fit_intercept:
+            self.intercept_ = mean_y - mean_X @ self.coef_
+        return self
 
 
 class MultiModelWrapper(object):

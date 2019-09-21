@@ -445,9 +445,9 @@ class TestStatsModels(unittest.TestCase):
         """ Testing that the summarized version of DML gives the same results as the non-summarized when Lasso is used for first stage models. """
         from econml.dml import LinearDMLCateEstimator
         from econml.inference import StatsModelsInference
-        from econml.utilities import WeightedModelWrapper
+        from econml.utilities import WeightedLasso
 
-        first_stage_model = lambda: Lasso(alpha=0.01, fit_intercept=False, tol=1e-12, random_state=123)
+        first_stage_model = lambda: WeightedLasso(alpha=0.01, fit_intercept=True, tol=1e-12, random_state=123)
         n = 100
         for d in [1, 5]:
             for p in [1, 5]:
@@ -479,8 +479,8 @@ class TestStatsModels(unittest.TestCase):
                                 return [(np.arange(0, first_half_sum), np.arange(first_half_sum, X.shape[0])), 
                                         (np.arange(first_half_sum, X.shape[0]), np.arange(0, first_half_sum))]
                         
-                        est = LinearDMLCateEstimator(model_y = WeightedModelWrapper(first_stage_model()),
-                                            model_t = WeightedModelWrapper(first_stage_model()),
+                        est = LinearDMLCateEstimator(model_y = first_stage_model(),
+                                            model_t = first_stage_model(),
                                             n_splits=SplitterSum(),
                                             linear_first_stages=False,
                                             discrete_treatment=False).fit(y_sum, X_final[:, -1], X_final[:, :-1], None, sample_weight=n_sum,
