@@ -231,7 +231,7 @@ def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
 
 def monte_carlo_rf(first_stage=lambda : RandomForestRegressor(n_estimators=100, max_depth=3, min_samples_leaf=10), folder='rf'):
     n = 500
-    n_exp = 100
+    n_exp = 1000
     hetero_coef_list = [1]
     d_list = [20]
     d_x_list = [5]
