@@ -3,7 +3,7 @@ from econml.dml import LinearDMLCateEstimator
 from sklearn.linear_model import LinearRegression, MultiTaskLassoCV, MultiTaskLasso, Lasso
 from econml.inference import StatsModelsInference
 from econml.tests.test_statsmodels import _summarize
-from econml.utilities import WeightedModelWrapper, LassoCVWrapper
+from econml.utilities import WeightedModelWrapper, LassoCVWrapper, WeightedLasso, GridSearchCVList
 from sklearn.ensemble import RandomForestRegressor
 from statsmodels.tools.tools import add_constant
 import matplotlib.pyplot as plt
@@ -59,7 +59,7 @@ def _agg_coverage(coverage, qs=np.array([.005, .025, .1, .9, .975, .995])):
     return mean_coverage_est, std_coverage_est, q_coverage_est
 
 
-def plot_coverage(coverage, cov_key,  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="", folder="", print_matrix=False):
+def plot_coverage(coverage, cov_key, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="", folder="", print_matrix=False):
     if not os.path.exists('figures'):
         os.makedirs('figures')
     if not os.path.exists(os.path.join("figures", folder)):
@@ -73,7 +73,7 @@ def plot_coverage(coverage, cov_key,  hetero_coef_list, d_list, d_x_list, p_list
                 for p in p_list:
                     for cov_type in cov_type_list:
                         for alpha in alpha_list:
-                            key = "hetero_{}_d_{}_d_x_{}_p_{}_cov_type_{}_alpha_{}".format(hetero_coef, d, d_x, p, cov_type, alpha)
+                            key = "n_{}_n_exp_{}_hetero_{}_d_{}_d_x_{}_p_{}_cov_type_{}_alpha_{}".format(n, n_exp, hetero_coef, d, d_x, p, cov_type, alpha)
                             if print_matrix:
                                 print(coverage[key][cov_key])
                             plt.figure()
@@ -176,7 +176,7 @@ def run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list
                                                 discrete_treatment=False).fit(y, X[:, -1], X[:, :d_x], X[:, d_x:-1],
                                                                             inference=StatsModelsInference(cov_type=cov_type))
                             for alpha in alpha_list:
-                                key = "hetero_{}_d_{}_d_x_{}_p_{}_cov_type_{}_alpha_{}".format(hetero_coef, d, d_x, p, cov_type, alpha)
+                                key = "n_{}_n_exp_{}_hetero_{}_d_{}_d_x_{}_p_{}_cov_type_{}_alpha_{}".format(n, n_exp, hetero_coef, d, d_x, p, cov_type, alpha)
                                 _append_coverage(key, coverage_est, est, X_test, alpha, true_coef, true_effect)
                                 _append_coverage(key, coverage_lr, lr, X_test, alpha, true_coef, true_effect)
                                 if it==n_exp-1:
@@ -208,10 +208,10 @@ def run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list
     agg_coverage_lr, std_coverage_lr, q_coverage_lr = _agg_coverage(coverage_lr)
 
     print("\nResults for: {}\n--------------------------\n".format(folder))
-    plot_coverage(agg_coverage_est, 'coef_cov', hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
-    plot_coverage(agg_coverage_lr, 'coef_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
-    plot_coverage(agg_coverage_est, 'effect_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
-    plot_coverage(agg_coverage_lr, 'effect_cov',  hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
+    plot_coverage(agg_coverage_est, 'coef_cov', n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
+    plot_coverage(agg_coverage_lr, 'coef_cov',  n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
+    plot_coverage(agg_coverage_est, 'effect_cov',  n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
+    plot_coverage(agg_coverage_lr, 'effect_cov',  n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
     
     print("Summarized Data\n----------------")
     print_aggregate(agg_coverage_est, std_coverage_est, q_coverage_est)
@@ -240,6 +240,23 @@ def monte_carlo_rf(first_stage=lambda : RandomForestRegressor(n_estimators=100, 
     alpha_list = [.01, .05, .2]
     run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list)
 
+def monte_carlo_gcv(folder='gcv'):
+    first_stage = lambda : GridSearchCVList([LinearRegression(),
+                                             WeightedLasso(alpha=0.05, fit_intercept=False, tol=1e-6, random_state=123),
+                                             RandomForestRegressor(n_estimators=100, max_depth=3, min_samples_leaf=10, random_state=123)],
+                                             param_grid_list=[{}, {}, {}],
+                                             cv=3,
+                                             iid=True)
+    n = 500
+    n_exp = 1000
+    hetero_coef_list = [1]
+    d_list = [20]
+    d_x_list = [5]
+    p_list = [1]
+    cov_type_list = ['HC1']
+    alpha_list = [.01, .05, .2]
+    run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Description of your program')
     parser.add_argument('-e','--exp', help='What experiment (default=all)', required=False, default='all')
@@ -247,6 +264,8 @@ if __name__ == "__main__":
     if args['exp'] in ['lr', 'all']:
         monte_carlo(folder="lr")
     if args['exp'] in ['lasso', 'all']:
-        monte_carlo(first_stage=lambda : WeightedModelWrapper(Lasso(alpha=0.05, fit_intercept=False, tol=1e-6, random_state=123)), folder='lasso')
+        monte_carlo(first_stage=lambda : WeightedLasso(alpha=0.05, fit_intercept=False, tol=1e-6, random_state=123), folder='lasso')
     if args['exp'] in ['rf', 'all']:
         monte_carlo_rf()
+    if args['exp'] in ['gcv', 'all']:
+        monte_carlo_gcv()

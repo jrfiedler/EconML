@@ -10,7 +10,7 @@ import itertools
 from operator import getitem
 from collections import defaultdict, Counter
 from sklearn.base import TransformerMixin
-from sklearn.linear_model import LassoCV, MultiTaskLassoCV
+from sklearn.linear_model import LassoCV, MultiTaskLassoCV, Lasso
 from functools import reduce
 from sklearn.utils import check_array, check_X_y
 from statsmodels.regression.linear_model import WLS, OLS
@@ -18,6 +18,7 @@ from statsmodels.genmod.generalized_linear_model import GLM
 from statsmodels.tools.tools import add_constant
 import warnings
 from sklearn.model_selection import KFold
+from sklearn.model_selection import GridSearchCV
 
 MAX_RAND_SEED = np.iinfo(np.int32).max
 
@@ -684,7 +685,7 @@ class WeightedModelWrapper(object):
         return self.model_instance.predict(X)
 
     def _weighted_inputs(self, X, y, sample_weight):
-        normalized_weights = X.shape[0] * sample_weight / np.sum(sample_weight)
+        normalized_weights = sample_weight * X.shape[0] / np.sum(sample_weight)
         sqrt_weights = np.sqrt(normalized_weights)
         weight_mat = np.diag(sqrt_weights)
         return np.matmul(weight_mat, X), np.matmul(weight_mat, y)
@@ -695,6 +696,22 @@ class WeightedModelWrapper(object):
         data_length = int(min(1 / np.min(normalized_weights[normalized_weights > 0]), 10) * X.shape[0])
         data_indices = np.random.choice(X.shape[0], size=data_length, p=normalized_weights)
         return X[data_indices], y[data_indices]
+
+class WeightedLasso(Lasso):
+
+    def __init__(self, alpha=1.0, fit_intercept=True, normalize=False, precompute=False, 
+                 copy_X=True, max_iter=1000, tol=0.0001, warm_start=False, positive=False,
+                 random_state=None, selection='cyclic'):
+        super().__init__(alpha=alpha, fit_intercept=fit_intercept, normalize=normalize, precompute=precompute, 
+                 copy_X=copy_X, max_iter=max_iter, tol=tol, warm_start=warm_start, positive=positive,
+                 random_state=random_state, selection=selection)
+
+    def fit(self, X, y, sample_weight=None):
+        if sample_weight is None:
+            sample_weight = np.ones(X.shape[0])
+        normalized_weights = sample_weight * X.shape[0] / np.sum(sample_weight)
+        sqrt_weights = np.sqrt(normalized_weights)
+        return super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights)
 
 
 class MultiModelWrapper(object):
@@ -1247,3 +1264,24 @@ class WeightedSplitter:
         for it in range(self._n_splits):
             folds.append([np.setdiff1d(all_samples, splits[it]), splits[it]])
         return folds
+
+
+class GridSearchCVList:
+
+    def __init__(self, estimator_list, param_grid_list, scoring=None, 
+                 n_jobs=None, iid='warn', refit=True, cv='warn', verbose=0, pre_dispatch='2*n_jobs',
+                 error_score='raise-deprecating', return_train_score=False):
+        self._gcv_list = [GridSearchCV(estimator, param_grid, scoring=scoring,
+                            n_jobs=n_jobs, iid=iid, refit=refit, cv=cv, verbose=verbose,
+                            pre_dispatch=pre_dispatch, error_score=error_score,
+                            return_train_score=return_train_score) for estimator, param_grid in zip(estimator_list, param_grid_list)]
+        return
+
+    def fit(self, X, y, **fit_params):
+        self.best_ind_ = np.argmax([gcv.fit(X, y, **fit_params).best_score_ for gcv in self._gcv_list])
+        self.best_estimator_ = self._gcv_list[self.best_ind_].best_estimator_
+        self.best_score_ = self._gcv_list[self.best_ind_].best_score_
+        self.best_params_ = self._gcv_list[self.best_ind_].best_params_
+
+    def predict(self, X):
+        return self.best_estimator_.predict(X)
