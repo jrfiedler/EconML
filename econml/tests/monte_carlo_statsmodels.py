@@ -82,12 +82,12 @@ def plot_coverage(coverage, cov_key, n, n_exp, hetero_coef_list, d_list, d_x_lis
                             plt.savefig(os.path.join("figures", folder, "{}{}_{}.png".format(prefix, key, cov_key)))
                             plt.close()
 
-def print_aggregate(mean_coverage, std_coverage, q_coverage):
+def print_aggregate(mean_coverage, std_coverage, q_coverage, file_gen=lambda : None):
     for key, cov in mean_coverage.items():
-        print(key)
+        print(key, file=file_gen())
         with np.printoptions(formatter={'float': '{:.4f}'.format}, suppress=True):
             print("Mean Coef (True)\t Mean SqErr \t Mean StdErr (True)\t [Mean Lower, Mean Upper]\t (True Quantiles):\r\n{}".format(
-                "\r\n".join(["{} ({}) \t {} \t {} ({}) \t [{}, {}] \t {}".format(est,
+                "\r\n".join(["{:.4f} ({:.4f}) \t {:.4f} \t {:.4f} ({:.4f}) \t [{:.4f}, {:.4f}] \t {}".format(est,
                                                                                 true,
                                                                                 sqerr,
                                                                                 stderr,
@@ -103,12 +103,17 @@ def print_aggregate(mean_coverage, std_coverage, q_coverage):
                                                                    std_coverage[key]['coef'],
                                                                    cov['coef_lower'],
                                                                    cov['coef_upper'],
-                                                                   q_coverage[key]['coef'].T)])))
-            print("Effect SqError: {}".format(np.mean(cov['effect_sqerror'])))
+                                                                   q_coverage[key]['coef'].T)])), file=file_gen())
+            print("Effect SqError: {}".format(np.mean(cov['effect_sqerror'])), file=file_gen())
 
 
 
 def run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list):
+
+    if not os.path.exists("results"):
+        os.makedirs('results')
+    results_filename = os.path.join("results", "{}.txt".format(folder))
+
     np.random.seed(123)
     coverage_est = {}
     coverage_lr = {}
@@ -185,38 +190,45 @@ def run_all_mc(first_stage, folder, n, n_exp, hetero_coef_list, d_list, d_x_list
                                     mean_eff_cov = np.mean(coverage_est[key]['effect_cov'])
                                     mean_coef_cov_lr = np.mean(coverage_lr[key]['coef_cov'])
                                     mean_eff_cov_lr = np.mean(coverage_lr[key]['effect_cov'])
-                                    print("{}. Time: {:.2f}, Mean Coef Cov: ({:.4f}, {:.4f}), Mean Effect Cov: ({:.4f}, {:.4f})".format(key,
+                                    [print("{}. Time: {:.2f}, Mean Coef Cov: ({:.4f}, {:.4f}), Mean Effect Cov: ({:.4f}, {:.4f})".format(key,
                                                                                                     time.time() - t0,
                                                                                                     mean_coef_cov, mean_coef_cov_lr,
-                                                                                                    mean_eff_cov, mean_eff_cov_lr))
+                                                                                                    mean_eff_cov, mean_eff_cov_lr), file=f)
+                                                                                                    for f in [None, open(results_filename, "a")]]
                                     coef_cov_dev = mean_coef_cov - (1-alpha)
                                     if np.abs(coef_cov_dev) >= cov_tol:
                                         n_failed_coef += 1
-                                        print("BAD coef coverage on average: deviation = {:.4f}".format(coef_cov_dev))
+                                        [print("BAD coef coverage on average: deviation = {:.4f}".format(coef_cov_dev), file=f)
+                                                                                                    for f in [None, open(results_filename, "a")]]
                                     eff_cov_dev = mean_eff_cov - (1-alpha)
                                     if np.abs(eff_cov_dev) >= cov_tol:
                                         n_failed_effect += 1
-                                        print("BAD effect coverage on average: deviation = {:.4f}".format(eff_cov_dev))
-    print("Finished {} Monte Carlo Tests. Failed Coef Coverage Tests: {}/{}. Failed Effect Coverage Tests: {}/{}. (Coverage Tolerance={})".format(n_tests,
+                                        [print("BAD effect coverage on average: deviation = {:.4f}".format(eff_cov_dev), file=f)
+                                                                                                    for f in [None, open(results_filename, "a")]]
+    [print("Finished {} Monte Carlo Tests. Failed Coef Coverage Tests: {}/{}. Failed Effect Coverage Tests: {}/{}. (Coverage Tolerance={})".format(n_tests,
                                                                                                                                                   n_failed_coef,
                                                                                                                                                   n_tests,
                                                                                                                                                   n_failed_effect,
                                                                                                                                                   n_tests,
-                                                                                                                                                  cov_tol))
+                                                                                                                                                  cov_tol),
+          file=f) for f in [None, open(results_filename, "a")]]
 
     agg_coverage_est, std_coverage_est, q_coverage_est = _agg_coverage(coverage_est)
     agg_coverage_lr, std_coverage_lr, q_coverage_lr = _agg_coverage(coverage_lr)
 
-    print("\nResults for: {}\n--------------------------\n".format(folder))
+    [print("\nResults for: {}\n--------------------------\n".format(folder), file=f) for f in [None, open(results_filename, "a")]]
+    
     plot_coverage(agg_coverage_est, 'coef_cov', n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
     plot_coverage(agg_coverage_lr, 'coef_cov',  n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
     plot_coverage(agg_coverage_est, 'effect_cov',  n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="sum_", folder=folder)
     plot_coverage(agg_coverage_lr, 'effect_cov',  n, n_exp, hetero_coef_list, d_list, d_x_list, p_list, cov_type_list, alpha_list, prefix="orig_", folder=folder)
     
-    print("Summarized Data\n----------------")
+    [print("Summarized Data\n----------------", file=f) for f in [None, open(results_filename, "a")]]
     print_aggregate(agg_coverage_est, std_coverage_est, q_coverage_est)
-    print("\nUn-Summarized Data\n-----------------")
+    print_aggregate(agg_coverage_est, std_coverage_est, q_coverage_est, lambda: open(results_filename, "a"))
+    [print("\nUn-Summarized Data\n-----------------", file=f) for f in [None, open(results_filename, "a")]]
     print_aggregate(agg_coverage_lr, std_coverage_lr, q_coverage_lr)
+    print_aggregate(agg_coverage_lr, std_coverage_lr, q_coverage_lr, lambda: open(results_filename, "a"))
 
 def monte_carlo(first_stage=lambda : LinearRegression(), folder='lr'):
     n = 500
