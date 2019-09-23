@@ -318,7 +318,6 @@ class TestStatsModels(unittest.TestCase):
     def test_sum_vs_original(self):
         """ Testing that the summarized version gives the same results as the non-summarized."""
         np.random.seed(123)
-
         # 1-d y
         n = 100
         p = 1
@@ -376,6 +375,7 @@ class TestStatsModels(unittest.TestCase):
         """ Testing that the summarized version of DML gives the same results as the non-summarized. """
         from econml.dml import LinearDMLCateEstimator
         from econml.inference import StatsModelsInference
+        np.random.seed(123)
         n = 100
         for d in [1, 5]:
             for p in [1, 5]:
@@ -446,8 +446,8 @@ class TestStatsModels(unittest.TestCase):
         from econml.dml import LinearDMLCateEstimator
         from econml.inference import StatsModelsInference
         from econml.utilities import WeightedLasso
-
-        first_stage_model = lambda: WeightedLasso(alpha=0.01, fit_intercept=True, tol=1e-12, random_state=123)
+        np.random.seed(123)
+        first_stage_model = lambda: WeightedLasso(alpha=0.01, fit_intercept=False, tol=1e-12, random_state=123)
         n = 100
         for d in [1, 5]:
             for p in [1, 5]:
@@ -469,8 +469,8 @@ class TestStatsModels(unittest.TestCase):
                         y_sum = np.concatenate((y_sum_first, y_sum_sec))
                         n_sum = np.concatenate((n_sum_first, n_sum_sec))
                         var_sum = np.concatenate((var_first, var_sec))
-                        first_half_sum = len(y_sum_first)
-                        first_half = len(y1)
+                        first_half_sum = np.array(y_sum_first).shape[0]
+                        first_half = np.array(y1).shape[0]
 
                         class SplitterSum:
                             def __init__(self):
@@ -478,7 +478,7 @@ class TestStatsModels(unittest.TestCase):
                             def split(self, X, T):
                                 return [(np.arange(0, first_half_sum), np.arange(first_half_sum, X.shape[0])), 
                                         (np.arange(first_half_sum, X.shape[0]), np.arange(0, first_half_sum))]
-                        
+
                         est = LinearDMLCateEstimator(model_y = first_stage_model(),
                                             model_t = first_stage_model(),
                                             n_splits=SplitterSum(),
@@ -492,7 +492,7 @@ class TestStatsModels(unittest.TestCase):
                             def split(self, X, T):
                                 return [(np.arange(0, first_half), np.arange(first_half, X.shape[0])), 
                                         (np.arange(first_half, X.shape[0]), np.arange(0, first_half))]
-                        
+
                         lr = LinearDMLCateEstimator(model_y = first_stage_model(),
                                             model_t = first_stage_model(),
                                             n_splits=Splitter(),
@@ -500,7 +500,7 @@ class TestStatsModels(unittest.TestCase):
                                             discrete_treatment=False).fit(y, X[:, -1], X[:, :-1], None,
                                             inference=StatsModelsInference(cov_type=cov_type))
 
-                        _compare_dml_classes(est, lr, X_test, alpha=alpha)
+                        _compare_dml_classes(est, lr, X_test, alpha=alpha, tol=1e-8)
 
                         if p==1:
                             lr = LinearDMLCateEstimator(model_y = first_stage_model(),
@@ -511,14 +511,14 @@ class TestStatsModels(unittest.TestCase):
                                                 discrete_treatment=False).fit(y, X[:, -1], X[:, :-1], None,
                                                 inference=StatsModelsInference(cov_type=cov_type, use_t=False))
                             
-                            _compare_dml_classes(est, lr, X_test, alpha=alpha)
+                            _compare_dml_classes(est, lr, X_test, alpha=alpha, tol=1e-8)
 
     def test_dml_sum_vs_original_rf(self):
         """ Testing that the summarized version of DML gives the same results as the non-summarized when RandomForest is used for first stage models. """
         from econml.dml import LinearDMLCateEstimator
         from econml.inference import StatsModelsInference
         from econml.utilities import WeightedModelWrapper
-
+        np.random.seed(123)
         first_stage_model = lambda: RandomForestRegressor(n_estimators=10, bootstrap=False, random_state=123)
         n = 1000
         for d in [1, 5]:
@@ -584,3 +584,81 @@ class TestStatsModels(unittest.TestCase):
                                                 inference=StatsModelsInference(cov_type=cov_type, use_t=False))
                             
                             _compare_dml_classes(est, lr, X_test, alpha=alpha)
+    
+
+    def test_dml_multi_dim_treatment_outcome(self):
+        """ Testing that the summarized and unsummarized version of DML gives the correct (known results). """
+        from econml.dml import LinearDMLCateEstimator
+        from econml.inference import StatsModelsInference
+        np.random.seed(123)
+        n = 100000
+        precision = .01
+        precision_int = .0001
+        with np.printoptions(formatter={'float': '{:.4f}'.format}, suppress=True):
+            for d in [2, 5]: #n_feats + n_controls
+                for d_x in [2]: #n_feats
+                    for p in [1, 5]: #n_outcomes
+                        for q in [1, 5]: #n_treatments
+                            X = np.random.binomial(1, .5, size=(n, d))
+                            T = np.hstack([np.random.binomial(1, .5 + .2*(2*X[:, [1]]-1)) for _ in range(q)])
+                            true_effect = lambda x, i: np.hstack([x[:, [0]] + 10*t + i for t in range(p)])
+                            y = np.sum((true_effect(X, i)*T[:, [i]] for i in range(q)), axis=0) + X[:, [0]*p] #+ np.random.normal(0, 1, size=(n,p))
+                            if p==1:
+                                y = y.flatten()
+                            est = LinearDMLCateEstimator(model_y=LinearRegression(),
+                                                        model_t=LinearRegression(),
+                                                        linear_first_stages=False)
+                            est.fit(y, T, X[:, :d_x], X[:, d_x:], inference=StatsModelsInference(cov_type='nonrobust'))
+                            coef = est.coef_.reshape(p, q, d_x+1)
+                            lower, upper = est.coef__interval(alpha=.001)
+                            lower = lower.reshape(p, q, d_x+1)
+                            upper = upper.reshape(p, q, d_x+1)
+                            for i in range(p):
+                                for j in range(q):
+                                    assert np.abs(coef[i, j, 0] - 10*i - j) < precision, (coef[i,j,0], 10*i+j)
+                                    assert (lower[i, j, 0] <= 10*i + j + precision_int) & (upper[i, j, 0] >= 10*i+j-precision_int), (lower[i,j,0], upper[i,j,0], 10*i+j)
+                                    assert np.abs(coef[i, j, 1] - 1) < precision, (coef[i, j, 1], 1)
+                                    assert (lower[i, j, 1] <= 1 + precision_int) & (upper[i, j, 1] >= 1 - precision_int), (lower[i, j, 1], upper[i, j, 1])
+                                    assert np.all(np.abs(coef[i, j, 2:]) < precision)
+                                    assert np.all((lower[i, j, 2:] <= precision_int) & (upper[i, j, 2:] >= -precision_int)), (np.max(lower[i, j, 2:]), np.min(upper[i, j, 2:]))
+
+                            XT = np.hstack([X, T])
+                            X1, X2, y1, y2, X_final_first, X_final_sec, y_sum_first, y_sum_sec, n_sum_first, n_sum_sec, var_first, var_sec = _summarize(XT, y)
+                            X = np.vstack([X1, X2])
+                            y = np.concatenate((y1, y2))
+                            X_final = np.vstack([X_final_first, X_final_sec])
+                            y_sum = np.concatenate((y_sum_first, y_sum_sec))
+                            n_sum = np.concatenate((n_sum_first, n_sum_sec))
+                            var_sum = np.concatenate((var_first, var_sec))
+                            first_half_sum = len(y_sum_first)
+
+                            class SplitterSum:
+                                def __init__(self):
+                                    return
+                                def split(self, X, T):
+                                    return [(np.arange(0, first_half_sum), np.arange(first_half_sum, X.shape[0])), 
+                                            (np.arange(first_half_sum, X.shape[0]), np.arange(0, first_half_sum))]
+
+                            est = LinearDMLCateEstimator(model_y = LinearRegression(),
+                                                model_t = LinearRegression(),
+                                                n_splits=SplitterSum(),
+                                                linear_first_stages=False,
+                                                discrete_treatment=False).fit(y_sum,
+                                                                            X_final[:, d:],
+                                                                            X_final[:, :d_x],
+                                                                            X_final[:, d_x:d],
+                                                                            sample_weight=n_sum,
+                                                                            var_weight=var_sum,
+                                                                            inference=StatsModelsInference(cov_type='nonrobust'))
+                            coef = est.coef_.reshape(p, q, d_x+1)
+                            lower, upper = est.coef__interval(alpha=.001)
+                            lower = lower.reshape(p, q, d_x+1)
+                            upper = upper.reshape(p, q, d_x+1)
+                            for i in range(p):
+                                for j in range(q):
+                                    assert np.abs(coef[i, j, 0] - 10*i - j) < precision, (coef[i,j,0], 10*i+j)
+                                    assert (lower[i, j, 0] <= 10*i + j + precision_int) & (upper[i, j, 0] >= 10*i+j-precision_int), (lower[i,j,0], upper[i,j,0], 10*i+j)
+                                    assert np.abs(coef[i, j, 1] - 1) < precision, (coef[i, j, 1], 1)
+                                    assert (lower[i, j, 1] <= 1 + precision_int) & (upper[i, j, 1] >= 1 - precision_int), (lower[i, j, 1], upper[i, j, 1])
+                                    assert np.all(np.abs(coef[i, j, 2:]) < precision)
+                                    assert np.all((lower[i, j, 2:] <= precision_int) & (upper[i, j, 2:] >= -precision_int)), (np.max(lower[i, j, 2:]), np.min(upper[i, j, 2:]))

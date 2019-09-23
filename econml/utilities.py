@@ -706,17 +706,16 @@ class WeightedLasso(Lasso):
         TODO. Add option to normalize. Currently normalization is disabled because normalization
         with sample weights is tricky.
         """
-        super().__init__(alpha=alpha, fit_intercept=False, normalize=False, precompute=precompute, 
+        super().__init__(alpha=alpha, fit_intercept=fit_intercept, normalize=False, precompute=precompute, 
                  copy_X=copy_X, max_iter=max_iter, tol=tol, warm_start=warm_start, positive=positive,
                  random_state=random_state, selection=selection)
-        self._weighted_fit_intercept = fit_intercept
 
     def fit(self, X, y, sample_weight=None):
         if sample_weight is None:
             sample_weight = np.ones(X.shape[0])
         normalized_weights = sample_weight * X.shape[0] / np.sum(sample_weight)
         sqrt_weights = np.sqrt(normalized_weights)
-        if self._weighted_fit_intercept:
+        if self.fit_intercept:
             mean_y = np.average(y, weights=normalized_weights, axis=0)
             mean_X = np.average(X, weights=normalized_weights, axis=0)
             if ndim(y) >= 2:
@@ -724,12 +723,17 @@ class WeightedLasso(Lasso):
             else:
                 y = y - mean_y
             X = X - mean_X.reshape(1, -1)
+        
+        fit_intercept_temp = self.fit_intercept
+        self.fit_intercept = False
         if ndim(y) >= 2:
             super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights.reshape(-1,1))
         else:
             super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights)
-        if self._weighted_fit_intercept:
-            self.intercept_ = mean_y - mean_X @ self.coef_
+        self.fit_intercept = fit_intercept_temp
+
+        if self.fit_intercept:
+            self.intercept_ = mean_y - self.coef_ @ mean_X 
         return self
 
 
@@ -989,7 +993,6 @@ class StatsModelsWrapper:
             warnings.warn("Co-variance matrix is undertermined. Inference will be invalid!")
 
         sigma_inv = np.linalg.pinv(np.matmul(WX.T, WX))
-
         self._param = param
         var_i = var_weight + (y - np.matmul(X, param))**2
         n_obs = np.sum(sample_weight)
@@ -1097,9 +1100,9 @@ class StatsModelsWrapper:
             The standard error of each parameter that was estimated.
         """
         if self._n_out == 0:
-            return np.sqrt(np.diag(self._param_var))
+            return np.sqrt(np.clip(np.diag(self._param_var), 0, np.inf))
         else:
-            return np.array([np.sqrt(np.diag(v)) for v in self._param_var]).T
+            return np.array([np.sqrt(np.clip(np.diag(v), 0, np.inf)) for v in self._param_var]).T
 
     @property
     def coef_stderr_(self):
@@ -1135,9 +1138,9 @@ class StatsModelsWrapper:
         if self._fit_intercept:
             X = add_constant(X, has_constant='add')
         if self._n_out == 0:
-            return np.sqrt(np.sum(np.matmul(X, self._param_var) * X, axis=1))
+            return np.sqrt(np.clip(np.sum(np.matmul(X, self._param_var) * X, axis=1), 0, np.inf))
         else:
-            return np.array([np.sqrt(np.sum(np.matmul(X, v) * X, axis=1)) for v in self._var]).T
+            return np.array([np.sqrt(np.clip(np.sum(np.matmul(X, v) * X, axis=1), 0, np.inf)) for v in self._var]).T
 
     def coef__interval(self, alpha=.05):
         """
