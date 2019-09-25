@@ -10,12 +10,16 @@ import itertools
 from operator import getitem
 from collections import defaultdict, Counter
 from sklearn.base import TransformerMixin
-from sklearn.linear_model import LassoCV, MultiTaskLassoCV
+from sklearn.linear_model import LassoCV, MultiTaskLassoCV, Lasso
 from functools import reduce
 from sklearn.utils import check_array, check_X_y
 from statsmodels.tools.tools import add_constant
 import warnings
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, StratifiedKFold
+from collections.abc import Iterable
+from sklearn.model_selection._split import _CVIterableWrapper, CV_WARNING
+from sklearn.utils.multiclass import type_of_target
+import numbers
 
 MAX_RAND_SEED = np.iinfo(np.int32).max
 
@@ -693,6 +697,271 @@ class WeightedModelWrapper(object):
         data_length = int(min(1 / np.min(normalized_weights[normalized_weights > 0]), 10) * X.shape[0])
         data_indices = np.random.choice(X.shape[0], size=data_length, p=normalized_weights)
         return X[data_indices], y[data_indices]
+
+
+class WeightedLasso(Lasso):
+
+    def __init__(self, alpha=1.0, fit_intercept=True, precompute=False,
+                 copy_X=True, max_iter=1000, tol=0.0001, warm_start=False, positive=False,
+                 random_state=None, selection='cyclic'):
+        """
+        TODO. Add option to normalize. Currently normalization is disabled because normalization
+        with sample weights is tricky.
+        """
+        super().__init__(alpha=alpha, fit_intercept=False, normalize=False, precompute=precompute,
+                         copy_X=copy_X, max_iter=max_iter, tol=tol, warm_start=warm_start, positive=positive,
+                         random_state=random_state, selection=selection)
+        self._weighted_fit_intercept = fit_intercept
+
+    def fit(self, X, y, sample_weight=None):
+        if sample_weight is None:
+            sample_weight = np.ones(X.shape[0])
+        normalized_weights = sample_weight * X.shape[0] / np.sum(sample_weight)
+        sqrt_weights = np.sqrt(normalized_weights)
+        if self.fit_intercept:
+            mean_y = np.average(y, weights=normalized_weights, axis=0)
+            mean_X = np.average(X, weights=normalized_weights, axis=0)
+            if ndim(y) >= 2:
+                y = y - mean_y.reshape(1, -1)
+            else:
+                y = y - mean_y
+            X = X - mean_X.reshape(1, -1)
+
+        fit_intercept_temp = self.fit_intercept
+        self.fit_intercept = False
+        if ndim(y) >= 2:
+            super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights.reshape(-1, 1))
+        else:
+            super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights)
+        self.fit_intercept = fit_intercept_temp
+
+        if self.fit_intercept:
+            self.intercept_ = mean_y - self.coef_ @ mean_X
+        return self
+
+
+class WeightedKFold:
+    def __init__(self, n_splits=2, tol=1e-1, weight_precision=1e-2):
+        self._n_splits = n_splits
+        self._tol = tol
+        self._weight_precision = weight_precision
+        return
+
+    def _trim(self, L, delta):
+        new_L = [L[0]]
+        last = L[0][0]
+        for i in np.arange(1, len(L)):
+            if last < (1 - delta) * L[i][0]:
+                new_L.append(L[i])
+                last = L[i][0]
+        return np.array(new_L)
+
+    def _merge_sorted(self, L1, L2):
+        new_L = []
+        it1 = 0
+        it2 = 0
+        for _ in range(len(L1) + len(L2)):
+            if L1[it1][0] < L2[it2][0]:
+                new_L.append(L1[it1])
+                it1 += 1
+                if it1 == len(L1):
+                    new_L.extend(L2[it2:])
+                    break
+            else:
+                new_L.append(L2[it2])
+                it2 += 1
+                if it2 == len(L2):
+                    new_L.extend(L1[it1:])
+                    break
+        return np.array(new_L)
+
+    def _approx_subset_sum(self, S, t, epsilon):
+        n = len(S)
+        Li = np.array([(0, [])])
+        for i in range(n):
+            add_i = np.array([(t[0] + S[i], t[1] + [i]) for t in Li])
+            Li = self._merge_sorted(Li, add_i)
+            Li = self._trim(Li, epsilon / n)
+            Li = np.array([x for x in Li if x[0] <= t])
+        return Li[-1]
+
+    def split(self, X, y, sample_weight=None):
+        if sample_weight is None:
+            return KFold(n_splits=self._n_splits).split(X, y)
+        if np.any(np.not_equal(np.mod(sample_weight, 1), 0)):
+            sample_weight = np.round(sample_weight / self._weight_precision)
+        total_sum = np.sum(sample_weight)
+        splits = []
+        remaining_samples = np.arange(X.shape[0])
+        for it in range(self._n_splits - 1):
+            new_split = remaining_samples[self._approx_subset_sum(
+                sample_weight[remaining_samples], total_sum / self._n_splits, self._tol)[1]]
+            remaining_samples = np.setdiff1d(remaining_samples, new_split)
+            splits.append(new_split)
+        splits.append(remaining_samples)
+        folds = []
+        all_samples = np.arange(X.shape[0])
+        for it in range(self._n_splits):
+            folds.append([np.setdiff1d(all_samples, splits[it]), splits[it]])
+        return folds
+
+
+class WeightedStratifiedKFold(WeightedKFold):
+
+    def __init__(self, n_splits=2, tol=1e-1, weight_precision=1e-2):
+        self._n_splits = n_splits
+        self._tol = tol
+        self._weight_precision = weight_precision
+        return
+
+    def split(self, X, y, sample_weight=None):
+        if sample_weight is None:
+            return StratifiedKFold(n_splits=self._n_splits).split(X, y)
+        if np.any(np.not_equal(np.mod(sample_weight, 1), 0)):
+            sample_weight = np.round(sample_weight / self._weight_precision)
+        splits = [[] for t in range(self._n_splits)]
+        for y_unique in np.unique(y, axis=0):
+            if y.ndim == 2:
+                remaining_samples = np.argwhere(np.all(y == y_unique, axis=1)).flatten()
+            else:
+                remaining_samples = np.argwhere(y == y_unique).flatten()
+            total_sum = np.sum(sample_weight[remaining_samples])
+            for it in range(self._n_splits - 1):
+                new_split = remaining_samples[self._approx_subset_sum(
+                    sample_weight[remaining_samples], total_sum / self._n_splits, self._tol)[1]]
+                remaining_samples = np.setdiff1d(remaining_samples, new_split)
+                splits[it].extend(new_split)
+            splits[self._n_splits - 1].extend(remaining_samples)
+        folds = []
+        all_samples = np.arange(X.shape[0])
+        for it in range(self._n_splits):
+            folds.append([np.setdiff1d(all_samples, splits[it]), splits[it]])
+        return folds
+
+
+class _WeightedCVIterableWrapper(_CVIterableWrapper):
+    def __init__(self, cv):
+        super().__init__(cv)
+
+    def get_n_splits(self, X=None, y=None, groups=None, sample_weight=None):
+        return super().get_n_splits(self, X, y, groups)
+
+    def split(self, X=None, y=None, groups=None, sample_weight=None):
+        return super().split(X, y, groups)
+
+
+def weighted_check_cv(cv='warn', y=None, classifier=False):
+    if cv is None or cv == 'warn':
+        warnings.warn(CV_WARNING, FutureWarning)
+        cv = 3
+
+    if isinstance(cv, numbers.Integral):
+        if (classifier and (y is not None) and
+                (type_of_target(y) in ('binary', 'multiclass'))):
+            return WeightedStratifiedKFold(cv)
+        else:
+            return WeightedKFold(cv)
+
+    if not hasattr(cv, 'split') or isinstance(cv, str):
+        if not isinstance(cv, Iterable) or isinstance(cv, str):
+            raise ValueError("Expected cv as an integer, cross-validation "
+                             "object (from sklearn.model_selection) "
+                             "or an iterable. Got %s." % cv)
+        return _WeightedCVIterableWrapper(cv)
+
+    return cv  # New style cv objects are passed without any modification
+
+
+class WeightedLassoCV(LassoCV):
+
+    def __init__(self, eps=1e-3, n_alphas=100, alphas=None, fit_intercept=True,
+                 precompute='auto', max_iter=1000, tol=1e-4, normalize=False,
+                 copy_X=True, cv='warn', verbose=False, n_jobs=None,
+                 positive=False, random_state=None, selection='cyclic'):
+
+        super().__init__(
+            eps=eps, n_alphas=n_alphas, alphas=alphas,
+            fit_intercept=fit_intercept, normalize=False,
+            precompute=precompute, max_iter=max_iter, tol=tol, copy_X=copy_X,
+            cv=cv, verbose=verbose, n_jobs=n_jobs, positive=positive,
+            random_state=random_state, selection=selection)
+
+    def fit(self, X, y, sample_weight=None):
+        cv_temp = self.cv
+        self.cv = weighted_check_cv(self.cv).split(X, y, sample_weight=sample_weight)
+
+        if sample_weight is None:
+            sample_weight = np.ones(X.shape[0])
+        normalized_weights = sample_weight * X.shape[0] / np.sum(sample_weight)
+        sqrt_weights = np.sqrt(normalized_weights)
+        if self.fit_intercept:
+            mean_y = np.average(y, weights=normalized_weights, axis=0)
+            mean_X = np.average(X, weights=normalized_weights, axis=0)
+            if ndim(y) >= 2:
+                y = y - mean_y.reshape(1, -1)
+            else:
+                y = y - mean_y
+            X = X - mean_X.reshape(1, -1)
+
+        fit_intercept_temp = self.fit_intercept
+        self.fit_intercept = False
+        if ndim(y) >= 2:
+            super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights.reshape(-1, 1))
+        else:
+            super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights)
+        self.fit_intercept = fit_intercept_temp
+
+        if self.fit_intercept:
+            self.intercept_ = mean_y - self.coef_ @ mean_X
+
+        self.cv = cv_temp
+        return self
+
+
+class WeightedMultiTaskLassoCV(MultiTaskLassoCV):
+
+    def __init__(self, eps=1e-3, n_alphas=100, alphas=None, fit_intercept=True,
+                 normalize=False, max_iter=1000, tol=1e-4,
+                 copy_X=True, cv='warn', verbose=False, n_jobs=None,
+                 random_state=None, selection='cyclic'):
+
+        super().__init__(
+            eps=eps, n_alphas=n_alphas, alphas=alphas,
+            fit_intercept=fit_intercept, normalize=False,
+            max_iter=max_iter, tol=tol, copy_X=copy_X,
+            cv=cv, verbose=verbose, n_jobs=n_jobs,
+            random_state=random_state, selection=selection)
+
+    def fit(self, X, y, sample_weight=None):
+        cv_temp = self.cv
+        self.cv = weighted_check_cv(self.cv).split(X, y, sample_weight=sample_weight)
+
+        if sample_weight is None:
+            sample_weight = np.ones(X.shape[0])
+        normalized_weights = sample_weight * X.shape[0] / np.sum(sample_weight)
+        sqrt_weights = np.sqrt(normalized_weights)
+        if self.fit_intercept:
+            mean_y = np.average(y, weights=normalized_weights, axis=0)
+            mean_X = np.average(X, weights=normalized_weights, axis=0)
+            if ndim(y) >= 2:
+                y = y - mean_y.reshape(1, -1)
+            else:
+                y = y - mean_y
+            X = X - mean_X.reshape(1, -1)
+
+        fit_intercept_temp = self.fit_intercept
+        self.fit_intercept = False
+        if ndim(y) >= 2:
+            super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights.reshape(-1, 1))
+        else:
+            super().fit(X * sqrt_weights.reshape(-1, 1), y * sqrt_weights)
+        self.fit_intercept = fit_intercept_temp
+
+        if self.fit_intercept:
+            self.intercept_ = mean_y - self.coef_ @ mean_X
+
+        self.cv = cv_temp
+        return self
 
 
 class MultiModelWrapper(object):
