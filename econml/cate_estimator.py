@@ -11,6 +11,7 @@ from warnings import warn
 from .bootstrap import BootstrapEstimator
 from .inference import BootstrapInference
 from .utilities import tensordot, ndim, reshape, shape
+from .inference import StatsModelsInference
 
 
 class BaseCateEstimator(metaclass=abc.ABCMeta):
@@ -262,4 +263,40 @@ class LinearCateEstimator(BaseCateEstimator):
 
     @BaseCateEstimator._defer_to_inference
     def const_marginal_effect_interval(self, X=None, *, alpha=0.1):
+        pass
+
+
+class StatsModelsCateEstimatorMixin(BaseCateEstimator):
+
+    def __init__(self, *args, **kwargs):
+        return
+
+    def _get_inference_options(self):
+        # add statsmodels to parent's options
+        options = super()._get_inference_options()
+        options.update(statsmodels=StatsModelsInference)
+        return options
+
+    @property
+    def effect_op(self):
+        pass
+
+    @property
+    def statsmodels(self):
+        pass
+
+    @property
+    def coef_(self):
+        return self.statsmodels.coef_
+    
+    @property
+    def intercept_(self):
+        return self.statsmodels.intercept_
+
+    @BaseCateEstimator._defer_to_inference
+    def coef__interval(self, *, alpha=0.1):
+        pass
+
+    @BaseCateEstimator._defer_to_inference
+    def intercept__interval(self, *, alpha=0.1):
         pass

@@ -9,12 +9,16 @@ For more details on these CATE methods, see <https://arxiv.org/abs/1706.03461>
 
 import numpy as np
 import warnings
-from .cate_estimator import BaseCateEstimator
+from .cate_estimator import BaseCateEstimator, StatsModelsCateEstimatorMixin
 from sklearn import clone
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.utils import check_array, check_X_y
 from .utilities import check_inputs
+from .utilities import StatsModelsLinearRegression
+from .inference import StatsModelsInference
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.utils.metaestimators import if_delegate_has_method
 
 
 class TLearner(BaseCateEstimator):
@@ -577,3 +581,69 @@ class DoublyRobustLearner(BaseCateEstimator):
             Matrix of heterogeneous treatment effects for each sample.
         """
         return self.effect(X)
+
+class InferencePipeline(Pipeline):
+    def __init__(self, steps, memory=None):
+        super().__init__(steps, memory=memory)
+   
+    @if_delegate_has_method(delegate='_final_estimator')
+    def predict_interval(self, X, **predict_params):
+        Xt = X
+        for name, transform in self.steps[:-1]:
+            if transform is not None:
+                Xt = transform.transform(Xt)
+        return self.steps[-1][-1].predict_interval(Xt, **predict_params)
+
+    @if_delegate_has_method(delegate='_final_estimator')
+    def coef__interval(self, *args, **kwargs):
+        return self.steps[-1][-1].coef__interval(*args, **kwargs)
+
+    @if_delegate_has_method(delegate='_final_estimator')
+    def intercept__interval(self, *args, **kwargs):
+        return self.steps[-1][-1].intercept__interval(*args, **kwargs)
+
+    @property
+    def coef_(self):
+        return self.steps[-1][-1].coef_
+
+    @property
+    def intercept_(self):
+        return self.steps[-1][-1].intercept_
+
+class LinearDoublyRobustLearner(DoublyRobustLearner, StatsModelsCateEstimatorMixin):
+    """Meta-algorithm that uses doubly-robust correction techniques to account for
+       covariate shift (selection bias) between the treatment arms.
+
+    Parameters
+    ----------
+    outcome_model : outcome estimator for all data points
+        Will be trained on features, controls and treatments (concatenated).
+        If different models per treatment arm are desired, see the <econml.ortho_forest.MultiModelWrapper>
+        helper class. The model(s) must implement `fit` and `predict` methods.
+
+    propensity_model : estimator for the propensity function
+        Must implement `fit` and `predict_proba` methods. The `fit` method must
+        be able to accept X and T, where T is a shape (n, ) array.
+        Ignored when `propensity_func` is provided.
+
+    propensity_func : propensity function
+        Must accept an array of feature vectors and return an array of
+        probabilities.
+        If provided, the value for `propensity_model` (if any) will be ignored.
+
+    """
+
+    def __init__(self,
+                 outcome_model,
+                 propensity_model=LogisticRegression(),
+                 propensity_func=None,
+                 featurizer=PolynomialFeatures(degree=1, include_bias=False)):
+        super().__init__(outcome_model,
+                         InferencePipeline([('feats', featurizer), ('final', StatsModelsLinearRegression())]),
+                         propensity_model=propensity_model,
+                         propensity_func=propensity_func)
+        self.featurizer = self.pseudo_treatment_model.named_steps['feats']
+    
+    @property
+    def statsmodels(self):
+        return self.pseudo_treatment_model

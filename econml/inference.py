@@ -4,6 +4,7 @@
 import abc
 import numpy as np
 from .bootstrap import BootstrapEstimator
+from .utilities import cross_product, broadcast_unit_treatments, reshape_treatmentwise_effects
 
 """Options for performing inference in estimators."""
 
@@ -59,6 +60,7 @@ class BootstrapInference(Inference):
         return wrapped
 
 
+
 class StatsModelsInference(Inference):
     """
     Stores statsmodels covariance options.
@@ -66,8 +68,8 @@ class StatsModelsInference(Inference):
     This class can be used for inference by the LinearDMLCateEstimator.
 
     Any estimator that supports this method of inference must implement a `statsmodels`
-    property that returns a `StatsModelsLinearRegression` instance and an `effect_op` property that returns an
-    `_EffectOp`.
+    property that returns a `StatsModelsLinearRegression` instance and a `featurizer` property that returns an
+    preprocessing featurizer for the X variable.
 
     Parameters
     ----------
@@ -98,19 +100,29 @@ class StatsModelsInference(Inference):
         self.statsmodels = estimator.statsmodels
         # need to set the fit args before the estimator is fit
         self.statsmodels.fit_args = {'cov_type': self.cov_type, 'use_t': self.use_t, 'cov_kwds': self.cov_kwds}
+        self.featurizer = estimator.featurizer if hasattr(estimator, 'featurizer') else None
 
     def fit(self, estimator, *args, **kwargs):
         # once the estimator has been fit, it's kosher to access its effect_op and store it here
         # (which needs to have seen the expanded d_t if there's a discrete treatment, etc.)
-        self.effect_op = estimator.effect_op
+        self._d_t = estimator._d_t
+        self._d_y = estimator._d_y
 
     def effect_interval(self, X, *, T0=0, T1=1, alpha=0.1):
-        return self.effect_op.apply(self.statsmodels.predict_interval, (X, T1 - T0),
-                                    interval=True, make_const_marginal_effect=False, alpha=alpha)
+        if self.featurizer is not None:
+            X = self.featurizer.fit_transform(X)
+        return self.statsmodels.predict_interval(cross_product(X, T1-T0), alpha=alpha)
 
     def const_marginal_effect_interval(self, X, *, alpha=0.1):
-        return self.effect_op.apply(self.statsmodels.predict_interval, X,
-                                    interval=True, make_const_marginal_effect=True, alpha=alpha)
+        X, T = broadcast_unit_treatments(X, self._d_t[0] if self._d_t else 1)
+        if self.featurizer is not None:
+            X = self.featurizer.fit_transform(X)
+        preds = self.statsmodels.predict_interval(cross_product(X, T), alpha=alpha)
+        return np.stack([reshape_treatmentwise_effects(pred, self._d_t, self._d_y)
+                                 for pred in preds])
 
     def coef__interval(self, *, alpha=0.1):
         return self.statsmodels.coef__interval(alpha)
+
+    def intercept__interval(self, *, alpha=0.1):
+        return self.statsmodels.intercept__interval(alpha)
