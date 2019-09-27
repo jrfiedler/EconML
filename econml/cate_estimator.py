@@ -258,19 +258,28 @@ class LinearCateEstimator(BaseCateEstimator):
     def const_marginal_effect_interval(self, X=None, *, alpha=0.1):
         pass
 
-class BinaryTreatmentCateEstimator(LinearCateEstimator):
+class BinaryTreatmentCateEstimator(BaseCateEstimator):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
     
     def effect(self, X=None):
-        return super().effect(X=X, T0=np.zeros((X.shape[0],1)), T1=np.ones((X.shape[0],1)))
-    
-    def effect_interval(self, X=None, *, alpha=0.1):
-        return super().effect_interval(X=X, T0=np.zeros((X.shape[0],1)), T1=np.ones((X.shape[0],1)), alpha=alpha)
-    
+        pass
+        
     def const_marginal_effect(self, X=None):
         return self.effect(X=X)
+    
+    def marginal_effect(self, T, X=None):
+        return self.effect(X=X)
+
+    def effect_interval(self, X=None, *, alpha=0.1):
+        return super().effect_interval(X=X, T0=np.zeros((X.shape[0],1)), T1=np.ones((X.shape[0],1)), alpha=alpha)
+
+    def const_marginal_effect_interval(self, X=None, *, alpha=0.1):
+        return self.effect_interval(X=X, alpha=alpha)
+    
+    def marginal_effect_interval(self, T, X=None, *, alpha=0.1):
+        return self.effect_interval(X=X, alpha=alpha)
 
 
 class StatsModelsCateEstimatorMixin(BaseCateEstimator):
