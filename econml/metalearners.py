@@ -9,7 +9,7 @@ For more details on these CATE methods, see <https://arxiv.org/abs/1706.03461>
 
 import numpy as np
 import warnings
-from .cate_estimator import BaseCateEstimator, StatsModelsCateEstimatorMixin
+from .cate_estimator import BaseCateEstimator, StatsModelsCateEstimatorMixin, BinaryTreatmentCateEstimator
 from sklearn import clone
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
@@ -453,7 +453,7 @@ class DomainAdaptationLearner(BaseCateEstimator):
             model_instance.fit(X, y, **{"{0}__sample_weight".format(last_step_name): sample_weight})
 
 
-class DoublyRobustLearner(BaseCateEstimator):
+class DoublyRobustLearner(BinaryTreatmentCateEstimator):
     """Meta-algorithm that uses doubly-robust correction techniques to account for
        covariate shift (selection bias) between the treatment arms.
 
@@ -642,7 +642,7 @@ class LinearDoublyRobustLearner(DoublyRobustLearner, StatsModelsCateEstimatorMix
                          InferencePipeline([('feats', featurizer), ('final', StatsModelsLinearRegression())]),
                          propensity_model=propensity_model,
                          propensity_func=propensity_func)
-        self.featurizer = self.pseudo_treatment_model.named_steps['feats']
+        self._featurizer = self.pseudo_treatment_model.named_steps['feats']
     
     @property
     def statsmodels(self):

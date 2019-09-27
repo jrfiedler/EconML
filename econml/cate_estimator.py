@@ -10,7 +10,7 @@ from copy import deepcopy
 from warnings import warn
 from .bootstrap import BootstrapEstimator
 from .inference import BootstrapInference
-from .utilities import tensordot, ndim, reshape, shape
+from .utilities import tensordot, ndim, reshape, shape, check_treatments
 from .inference import StatsModelsInference
 
 
@@ -217,14 +217,7 @@ class LinearCateEstimator(BaseCateEstimator):
         #       but tensordot can't be applied to this problem because we don't sum over m
         eff = self.const_marginal_effect(X)
         m = shape(eff)[0]
-        if (ndim(T0) == 0 or ndim(T1) == 0) and self._d_t and shape(self._d_t)[1] > 1:
-            warn("A scalar was specified but there are multiple treatments; "
-                 "the same value will be used for each treatment.  Consider specifying"
-                 "all treatments, or using the const_marginal_effect method.")
-        if ndim(T0) == 0:
-            T0 = np.repeat(T0, (m,) + self._d_t)
-        if ndim(T1) == 0:
-            T1 = np.repeat(T1, (m,) + self._d_t)
+        T0, T1 = check_treatments(T0, T1, m, self._d_t)
         dT = T1 - T0
         einsum_str = 'myt,mt->my'
         if ndim(dT) == 1:
@@ -265,6 +258,20 @@ class LinearCateEstimator(BaseCateEstimator):
     def const_marginal_effect_interval(self, X=None, *, alpha=0.1):
         pass
 
+class BinaryTreatmentCateEstimator(LinearCateEstimator):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def effect(self, X=None):
+        return super().effect(X=X, T0=np.zeros((X.shape[0],1)), T1=np.ones((X.shape[0],1)))
+    
+    #def effect_interval(self, X=None, *, alpha=0.1):
+    #    return super().effect_interval(X=X, T0=np.zeros((X.shape[0],1)), T1=np.ones((X.shape[0],1)), alpha=alpha)
+    
+    def const_marginal_effect(self, X=None):
+        return self.effect(X=X)
+
 
 class StatsModelsCateEstimatorMixin(BaseCateEstimator):
 
@@ -300,3 +307,4 @@ class StatsModelsCateEstimatorMixin(BaseCateEstimator):
     @BaseCateEstimator._defer_to_inference
     def intercept__interval(self, *, alpha=0.1):
         pass
+

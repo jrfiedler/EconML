@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from sklearn.model_selection._split import _CVIterableWrapper, CV_WARNING
 from sklearn.utils.multiclass import type_of_target
 import numbers
+from warnings import warn
 
 MAX_RAND_SEED = np.iinfo(np.int32).max
 
@@ -487,6 +488,16 @@ def reshape_treatmentwise_effects(A, d_t, d_y):
     else:
         return A
 
+def check_treatments(T0, T1, dx, dt):
+    if (ndim(T0) == 0 or ndim(T1) == 0) and dt and shape(dt)[1] > 1:
+        warn("A scalar was specified but there are multiple treatments; "
+                "the same value will be used for each treatment.  Consider specifying"
+                "all treatments, or using the const_marginal_effect method.")
+    if ndim(T0) == 0:
+        T0 = np.repeat(T0, (dx[0],) + dt)
+    if ndim(T1) == 0:
+        T1 = np.repeat(T1, (dx[0],) + dt)
+    return T0, T1
 
 def einsum_sparse(subscripts, *arrs):
     """
