@@ -21,7 +21,7 @@ from sklearn.preprocessing import PolynomialFeatures
 from sklearn.utils.metaestimators import if_delegate_has_method
 
 
-class TLearner(BaseCateEstimator):
+class TLearner(BinaryTreatmentCateEstimator):
     """Conditional mean regression estimator.
 
     Parameters
@@ -90,25 +90,8 @@ class TLearner(BaseCateEstimator):
         tau_hat = self.treated_model.predict(X) - self.controls_model.predict(X)
         return tau_hat
 
-    def marginal_effect(self, X):
-        """Calculate the heterogeneous marginal treatment effect.
 
-        For binary treatments, it returns the same as `effect`.
-
-        Parameters
-        ----------
-        X : matrix, shape (m × dₓ)
-            Matrix of features for each sample.
-
-        Returns
-        -------
-        τ_hat : array-like, shape (m, )
-            Matrix of heterogeneous treatment effects for each sample.
-        """
-        return self.effect(X)
-
-
-class SLearner(BaseCateEstimator):
+class SLearner(BinaryTreatmentCateEstimator):
     """Conditional mean regression estimator where the treatment assignment is taken as a feature in the ML model.
 
     Parameters
@@ -174,25 +157,9 @@ class SLearner(BaseCateEstimator):
         tau_hat = self.overall_model.predict(X_treated) - self.overall_model.predict(X_controls)
         return tau_hat
 
-    def marginal_effect(self, X):
-        """Calculate the heterogeneous marginal treatment effect.
-
-        For binary treatments, it returns the same as `effect`.
-
-        Parameters
-        ----------
-        X : matrix, shape (m × dₓ)
-            Matrix of features for each sample.
-
-        Returns
-        -------
-        τ_hat : array-like, shape (m, )
-            Matrix of heterogeneous treatment effects for each sample.
-        """
-        return self.effect(X)
 
 
-class XLearner(BaseCateEstimator):
+class XLearner(BinaryTreatmentCateEstimator):
     """Meta-algorithm proposed by Kunzel et al. that performs best in settings
        where the number of units in one treatment arm is much larger than in the other.
 
@@ -302,25 +269,8 @@ class XLearner(BaseCateEstimator):
             + (1 - propensity_scores) * self.cate_treated_model.predict(X)
         return tau_hat
 
-    def marginal_effect(self, X):
-        """Calculate the heterogeneous marginal treatment effect.
 
-        For binary treatments, it returns the same as `effect`.
-
-        Parameters
-        ----------
-        X : matrix, shape (m × dₓ)
-            Matrix of features for each sample.
-
-        Returns
-        -------
-        τ_hat : array-like, shape (m, )
-            Matrix of heterogeneous treatment effects for each sample.
-        """
-        return self.effect(X)
-
-
-class DomainAdaptationLearner(BaseCateEstimator):
+class DomainAdaptationLearner(BinaryTreatmentCateEstimator):
     """Meta-algorithm that uses domain adaptation techniques to account for
        covariate shift (selection bias) between the treatment arms.
 
@@ -427,23 +377,6 @@ class DomainAdaptationLearner(BaseCateEstimator):
         X = check_array(X)
         tau_hat = self.overall_model.predict(X)
         return tau_hat
-
-    def marginal_effect(self, X):
-        """Calculate the heterogeneous marginal treatment effect.
-
-        For binary treatments, it returns the same as `effect`.
-
-        Parameters
-        ----------
-        X : matrix, shape (m × dₓ)
-            Matrix of features for each sample.
-
-        Returns
-        -------
-        τ_hat : array-like, shape (m, )
-            Matrix of heterogeneous treatment effects for each sample.
-        """
-        return self.effect(X)
 
     def _fit_weighted_pipeline(self, model_instance, X, y, sample_weight):
         if not isinstance(model_instance, Pipeline):
