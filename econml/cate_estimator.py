@@ -266,8 +266,8 @@ class BinaryTreatmentCateEstimator(LinearCateEstimator):
     def effect(self, X=None):
         return super().effect(X=X, T0=np.zeros((X.shape[0],1)), T1=np.ones((X.shape[0],1)))
     
-    #def effect_interval(self, X=None, *, alpha=0.1):
-    #    return super().effect_interval(X=X, T0=np.zeros((X.shape[0],1)), T1=np.ones((X.shape[0],1)), alpha=alpha)
+    def effect_interval(self, X=None, *, alpha=0.1):
+        return super().effect_interval(X=X, T0=np.zeros((X.shape[0],1)), T1=np.ones((X.shape[0],1)), alpha=alpha)
     
     def const_marginal_effect(self, X=None):
         return self.effect(X=X)
