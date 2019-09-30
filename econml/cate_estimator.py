@@ -10,7 +10,7 @@ from copy import deepcopy
 from warnings import warn
 from .bootstrap import BootstrapEstimator
 from .inference import BootstrapInference
-from .utilities import tensordot, ndim, reshape, shape, check_treatments
+from .utilities import tensordot, ndim, reshape, shape
 from .inference import StatsModelsInference
 
 
@@ -93,7 +93,7 @@ class BaseCateEstimator(metaclass=abc.ABCMeta):
         return call
 
     @abc.abstractmethod
-    def effect(self, X=None, T0=0, T1=1):
+    def effect(self, X=None, *, T0, T1):
         """
         Calculate the heterogeneous treatment effect τ(·,·,·).
 
@@ -188,7 +188,7 @@ class LinearCateEstimator(BaseCateEstimator):
         """
         pass
 
-    def effect(self, X=None, T0=0, T1=1):
+    def effect(self, X=None, *, T0, T1):
         """
         Calculate the heterogeneous treatment effect τ(·,·,·).
 
@@ -217,7 +217,6 @@ class LinearCateEstimator(BaseCateEstimator):
         #       but tensordot can't be applied to this problem because we don't sum over m
         eff = self.const_marginal_effect(X)
         m = shape(eff)[0]
-        T0, T1 = check_treatments(T0, T1, m, self._d_t)
         dT = T1 - T0
         einsum_str = 'myt,mt->my'
         if ndim(dT) == 1:
@@ -249,14 +248,62 @@ class LinearCateEstimator(BaseCateEstimator):
             the corresponding singleton dimensions in the output will be collapsed
             (e.g. if both are vectors, then the output of this method will also be a vector)
         """
-        return self.const_marginal_effect(X)
+        eff = self.const_marginal_effect(X)
+        return np.repeat(eff, shape(T)[0], axis=0) if X is None else eff
 
     def marginal_effect_interval(self, T, X=None, *, alpha=0.1):
-        return self.const_marginal_effect_interval(X=X, alpha=alpha)
+        effs = self.const_marginal_effect_interval(X=X, alpha=alpha)
+        return tuple(np.repeat(eff, shape(T)[0], axis=0) if X is None else eff
+                     for eff in effs)
 
     @BaseCateEstimator._defer_to_inference
     def const_marginal_effect_interval(self, X=None, *, alpha=0.1):
         pass
+
+
+class TreatmentExpansionMixin(BaseCateEstimator):
+    """Mixin which automatically handles promotions of scalar treatments to the appropriate shape."""
+
+    transformer = None
+
+    def _prefit(self, Y, T, *args, **kwargs):
+        super()._prefit(Y, T, *args, **kwargs)
+        # need to store the *original* dimensions of T so that we can expand scalar inputs to match;
+        # subclasses should overwrite self._d_t with post-transformed dimensions of T for generating treatments
+        self._d_t_in = self._d_t
+
+    def _expand_treatments(self, X=None, *Ts):
+        n_rows = 1 if X is None else shape(X)[0]
+        outTs = []
+        for T in Ts:
+            if (ndim(T) == 0) and self._d_t_in and self._d_t_in[0] > 1:
+                warn("A scalar was specified but there are multiple treatments; "
+                     "the same value will be used for each treatment.  Consider specifying"
+                     "all treatments, or using the const_marginal_effect method.")
+            if ndim(T) == 0:
+                T = np.full((n_rows,) + self._d_t_in, T)
+
+            if self.transformer:
+                T = self.transformer.transform(T)
+            outTs.append(T)
+
+        return outTs
+
+    def effect(self, X=None, T0=0, T1=1):
+        T0, T1 = self._expand_treatments(X, T0, T1)
+        return super().effect(X, T0=T0, T1=T1)
+
+    def effect_interval(self, X=None, *, T0=0, T1=1, alpha=0.1):
+        T0, T1 = self._expand_treatments(X, T0, T1)
+        return super().effect_interval(X, T0=T0, T1=T1, alpha=alpha)
+
+    def marginal_effect(self, T, X=None):
+        (T,) = self._expand_treatments(X, T)
+        return super().marginal_effect(T, X)
+
+    def marginal_effect_interval(self, T, X=None, *, alpha=0.1):
+        (T,) = self._expand_treatments(X, T)
+        return super().marginal_effect_interval(T, X, alpha=0.1)
 
 
 class StatsModelsCateEstimatorMixin(BaseCateEstimator):

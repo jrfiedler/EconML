@@ -11,6 +11,7 @@ from sklearn.model_selection import KFold
 from econml.dml import LinearDMLCateEstimator, SparseLinearDMLCateEstimator, KernelDMLCateEstimator
 import numpy as np
 from econml.utilities import shape, hstack, vstack, reshape, cross_product
+from contextlib import ExitStack
 
 
 # all solutions to underdetermined (or exactly determined) Ax=b are given by A⁺b+(I-A⁺A)w for some arbitrary w
@@ -27,33 +28,74 @@ class TestDML(unittest.TestCase):
 
     def test_cate_api(self):
         """Test that we correctly implement the CATE API."""
-        for d_t in [2, -1]:
-            for d_y in [2, 1, -1]:
-                for d_x in [2, None]:
-                    for d_w in [2, None]:
-                        for est, multi in [(LinearDMLCateEstimator(model_y=LinearRegression(),
-                                                                   model_t=LinearRegression()), False),
-                                           (SparseLinearDMLCateEstimator(model_y=LinearRegression(),
-                                                                         model_t=LinearRegression()), True),
-                                           (KernelDMLCateEstimator(model_y=LinearRegression(),
-                                                                   model_t=LinearRegression()), False)]:
-                            n = 20
-                            if not(multi) and d_y > 1:
-                                continue
-                            with self.subTest(d_w=d_w, d_x=d_x, d_y=d_y, d_t=d_t):
-                                W, X, Y, T = [np.random.normal(size=(n, d)) if (d and d >= 0)
-                                              else np.random.normal(size=(n,)) if (d and d < 0)
-                                              else None
-                                              for d in [d_w, d_x, d_y, d_t]]
+        for d_t in [2, 1, -1]:
+            for is_discrete in [True, False] if d_t <= 1 else [False]:
+                for d_y in [3, 1, -1]:
+                    for d_x in [2, None]:
+                        for d_w in [2, None]:
+                            model_t = LogisticRegression() if is_discrete else LinearRegression()
+                            for est, multi in [(LinearDMLCateEstimator(model_y=LinearRegression(),
+                                                                       model_t=model_t,
+                                                                       discrete_treatment=is_discrete), False),
+                                               (SparseLinearDMLCateEstimator(model_y=LinearRegression(),
+                                                                             model_t=model_t,
+                                                                             discrete_treatment=is_discrete), True),
+                                               (KernelDMLCateEstimator(model_y=LinearRegression(),
+                                                                       model_t=model_t,
+                                                                       discrete_treatment=is_discrete), False)]:
+                                n = 20
+                                if not(multi) and d_y > 1:
+                                    continue
+                                with self.subTest(d_w=d_w, d_x=d_x, d_y=d_y, d_t=d_t,
+                                                  is_discrete=is_discrete, est=est):
+                                    def make_random(is_discrete, d):
+                                        if d is None:
+                                            return None
+                                        sz = (n, d) if d >= 0 else (n,)
+                                        if is_discrete:
+                                            return np.random.choice(['a', 'b', 'c'], size=sz)
+                                        else:
+                                            return np.random.normal(size=sz)
 
-                                est.fit(Y, T, X, W)
-                                # just make sure we can call the marginal_effect and effect methods
-                                est.marginal_effect(None, X)
-                                est.effect(X, np.zeros_like(T), T)
-                                est.score(Y, T, X, W)
-                                if d_t == -1:
-                                    # for vector-valued T, verify that default scalar T0 and T1 work
-                                    est.effect(X)
+                                    W, X, Y, T = [make_random(is_discrete, d)
+                                                  for is_discrete, d in [(False, d_w),
+                                                                         (False, d_x),
+                                                                         (False, d_y),
+                                                                         (is_discrete, d_t)]]
+
+                                    d_t_final = 2 if is_discrete else d_t
+
+                                    effect_shape = (n,) + ((d_y,) if d_y > 0 else ())
+                                    marginal_effect_shape = ((n,) +
+                                                             ((d_y,) if d_y > 0 else ()) +
+                                                             ((d_t_final,) if d_t_final > 0 else ()))
+
+                                    # since T isn't passed to const_marginal_effect, defaults to one row if X is None
+                                    const_marginal_effect_shape = ((n if d_x else 1,) +
+                                                                   ((d_y,) if d_y > 0 else ()) +
+                                                                   ((d_t_final,) if d_t_final > 0 else ()))
+                                    est.fit(Y, T, X, W)
+                                    # make sure we can call the marginal_effect and effect methods
+                                    const_marg_eff = est.const_marginal_effect(X)
+                                    marg_eff = est.marginal_effect(T, X)
+                                    self.assertEqual(shape(marg_eff), marginal_effect_shape)
+                                    self.assertEqual(shape(const_marg_eff), const_marginal_effect_shape)
+                                    np.testing.assert_array_equal(marg_eff if d_x else marg_eff[0:1], const_marg_eff)
+                                    T0 = np.full_like(T, 'a') if is_discrete else np.zeros_like(T)
+                                    self.assertEqual(shape(est.effect(X, T0, T)), effect_shape)
+
+                                    est.score(Y, T, X, W)
+
+                                    # make sure we can call effect with implied scalar treatments, no matter the
+                                    # dimensions of T, and also that we warn when there are multiple treatments
+                                    if d_t > 1:
+                                        cm = self.assertWarns(Warning)
+                                    else:
+                                        cm = ExitStack()  # ExitStack can be used as a "do nothing" ContextManager
+                                    with cm:
+                                        effect_shape = (n if d_x else 1,) + ((d_y,) if d_y > 0 else())
+                                        eff = est.effect(X) if not is_discrete else est.effect(X, 'a', 'b')
+                                        self.assertEqual(shape(eff), effect_shape)
 
     def test_can_use_vectors(self):
         """Test that we can pass vectors for T and Y (not only 2-dimensional arrays)."""
@@ -117,8 +159,8 @@ class TestDML(unittest.TestCase):
         assert (point <= hi).all()
         assert (lo < hi).any()  # for at least some of the examples, the CI should have nonzero width
 
-        interval = dml.marginal_effect_interval(np.ones((9, 1)), alpha=0.05)
-        point = dml.marginal_effect(np.ones((9, 1)))
+        interval = dml.const_marginal_effect_interval(np.ones((9, 1)), alpha=0.05)
+        point = dml.const_marginal_effect(np.ones((9, 1)))
         assert len(interval) == 2
         lo, hi = interval
         assert lo.shape == hi.shape == point.shape
