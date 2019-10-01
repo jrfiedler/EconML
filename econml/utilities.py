@@ -7,10 +7,14 @@ import numpy as np
 import scipy.sparse
 import sparse as sp
 import itertools
+import warnings
 from operator import getitem
 from collections import defaultdict, Counter
+from scipy.stats import norm
 from sklearn.base import TransformerMixin
 from functools import reduce
+from sklearn.linear_model import Lasso
+from sklearn.model_selection import GridSearchCV
 from sklearn.utils import check_array, check_X_y
 
 MAX_RAND_SEED = np.iinfo(np.int32).max
@@ -697,3 +701,334 @@ class MultiModelWrapper(object):
         t = Xt[:, -self.n_T:]
         predictions = [self.model_list[np.nonzero(t[i])[0][0]].predict(X[[i]]) for i in range(len(X))]
         return np.concatenate(predictions)
+
+
+class WeightedLasso(Lasso):
+    """Version of sklearn Lasso that accepts weights."""
+
+    def fit(self, X, y, sample_weight=None, check_input=True):
+        """Fit model with coordinate descent.
+
+        Parameters
+        ----------
+        X : ndarray or scipy.sparse matrix, (n_samples, n_features)
+            Data
+
+        y : ndarray, shape (n_samples,) or (n_samples, n_targets)
+            Target. Will be cast to X's dtype if necessary
+
+        sample_weight : numpy array of shape [n_samples]
+                        Individual weights for each sample.
+                        The weights will be normalized internally.
+
+        check_input : boolean, (default=True)
+            Allow to bypass several input checking.
+            Don't use this parameter unless you know what you do.
+        """
+
+        # Convert X, y into numpy arrays
+        X, y = check_X_y(X, y, y_numeric=True, multi_output=True)
+
+        if sample_weight is not None:
+            # Check weights array
+            if np.atleast_1d(sample_weight).ndim > 1:
+                # Check that weights are size-compatible
+                raise ValueError("Sample weights must be 1D array or scalar")
+            if np.ndim(sample_weight) == 0:
+                sample_weight = np.repeat(sample_weight, X.shape[0])
+            else:
+                sample_weight = check_array(sample_weight, ensure_2d=False, allow_nd=False)
+                if sample_weight.shape[0] != X.shape[0]:
+                    raise ValueError(
+                        "Found array with {0} sample(s) while {1} samples were expected.".format(
+                            sample_weight.shape[0], X.shape[0])
+                    )
+
+            # Normalize inputs and fit weighted lasso
+            normalized_weights = X.shape[0] * sample_weight / np.sum(sample_weight)
+            sqrt_weights = np.sqrt(normalized_weights)
+            weight_mat = np.diag(sqrt_weights)
+            X_weighted = np.matmul(weight_mat, X)
+            y_weighted = np.matmul(weight_mat, y)
+            # Fit Lasso
+            super(WeightedLasso, self).fit(X_weighted, y_weighted, check_input=check_input)
+
+            # The intercept is not calculated properly due the sqrt(weights) factor
+            # so it must be recomputed
+            _, _, X_offset, y_offset, X_scale = self._preprocess_data(
+                X, y, fit_intercept=self.fit_intercept, normalize=self.normalize,
+                copy=self.copy_X, sample_weight=sample_weight,
+                return_mean=True)
+            self._set_intercept(X_offset, y_offset, X_scale)
+        else:
+            # Fit lasso without weights
+            super(WeightedLasso, self).fit(X, y, check_input=check_input)
+        return self
+
+
+class DebiasedLasso(WeightedLasso):
+    """Debiased Lasso model.
+
+    Implementation was derived from <https://arxiv.org/abs/1303.0518>.
+
+    Only implemented for single-dimensional output. 
+
+    Parameters
+    ----------
+    alpha : string | float, optional. Default='auto'.
+        Constant that multiplies the L1 term. Defaults to 'auto'.
+        ``alpha = 0`` is equivalent to an ordinary least square, solved
+        by the :class:`LinearRegression` object. For numerical
+        reasons, using ``alpha = 0`` with the ``Lasso`` object is not advised.
+        Given this, you should use the :class:`LinearRegression` object.
+
+    fit_intercept : boolean, optional, default True
+        Whether to calculate the intercept for this model. If set
+        to False, no intercept will be used in calculations
+        (e.g. data is expected to be already centered).
+
+    precompute : True | False | array-like, default=False
+        Whether to use a precomputed Gram matrix to speed up
+        calculations. If set to ``'auto'`` let us decide. The Gram
+        matrix can also be passed as argument. For sparse input
+        this option is always ``True`` to preserve sparsity.
+
+    copy_X : boolean, optional, default True
+        If ``True``, X will be copied; else, it may be overwritten.
+
+    max_iter : int, optional
+        The maximum number of iterations
+
+    tol : float, optional
+        The tolerance for the optimization: if the updates are
+        smaller than ``tol``, the optimization code checks the
+        dual gap for optimality and continues until it is smaller
+        than ``tol``.
+
+    warm_start : bool, optional
+        When set to True, reuse the solution of the previous call to fit as
+        initialization, otherwise, just erase the previous solution.
+        See :term:`the Glossary <warm_start>`.
+
+    positive : bool, optional
+        When set to ``True``, forces the coefficients to be positive.
+
+    random_state : int, RandomState instance or None, optional, default None
+        The seed of the pseudo random number generator that selects a random
+        feature to update.  If int, random_state is the seed used by the random
+        number generator; If RandomState instance, random_state is the random
+        number generator; If None, the random number generator is the
+        RandomState instance used by `np.random`. Used when ``selection`` ==
+        'random'.
+
+    selection : str, default 'cyclic'
+        If set to 'random', a random coefficient is updated every iteration
+        rather than looping over features sequentially by default. This
+        (setting to 'random') often leads to significantly faster convergence
+        especially when tol is higher than 1e-4.
+
+    Attributes
+    ----------
+    coef_ : array, shape (n_features,)
+        Parameter vector (w in the cost function formula).
+
+    intercept_ : float
+        Independent term in decision function.
+
+    n_iter_ : int | array-like, shape (n_targets,)
+        Number of iterations run by the coordinate descent solver to reach
+        the specified tolerance.
+
+    selected_alpha_ : float
+        Penalty chosen through cross-validation, if alpha='auto'.
+
+    coef_std_err_ : array, shape (n_features,)
+        Estimated standard errors for coefficients (see 'coef_' attribute).
+
+    intercept_std_err_ : float
+        Estimated standard error intercept (see 'intercept_' attribute).
+
+    """
+
+    def __init__(self, alpha='auto', fit_intercept=True,
+                 precompute=False, copy_X=True, max_iter=1000,
+                 tol=1e-4, warm_start=False, positive=False,
+                 random_state=None, selection='cyclic'):
+        super(DebiasedLasso, self).__init__(
+            alpha=alpha, fit_intercept=fit_intercept,
+            normalize=False, precompute=precompute, copy_X=copy_X,
+            max_iter=max_iter, tol=tol, warm_start=warm_start,
+            positive=positive, random_state=random_state,
+            selection=selection)
+
+    def fit(self, X, y, sample_weight=None, check_input=True):
+        """Fit debiased lasso model.
+
+        Parameters
+        ----------
+        X : ndarray or scipy.sparse matrix, (n_samples, n_features)
+            Input data.
+
+        y : array, shape (n_samples,)
+            Target. Will be cast to X's dtype if necessary
+
+        sample_weight : numpy array of shape [n_samples]
+                        Individual weights for each sample.
+                        The weights will be normalized internally.
+
+        check_input : boolean, (default=True)
+            Allow to bypass several input checking.
+            Don't use this parameter unless you know what you do.
+        """
+        alpha_grid = [0.01, 0.02, 0.03, 0.06, 0.1, 0.2, 0.3, 0.5, 0.8, 1]
+        self.selected_alpha = None
+        if self.alpha == 'auto':
+            # Select optimal penalty
+            self.alpha = self._get_optimal_alpha(alpha_grid, X, y, sample_weight)
+            self.selected_alpha_ = self.alpha
+        else:
+            # Warn about consistency
+            warnings.warn("Setting a suboptimal alpha can lead to miscalibrated confidence interavals. "
+                          "We recommend setting alpha='auto' for optimality.")
+
+        # Convert X, y into numpy arrays
+        X, y = check_X_y(X, y, y_numeric=True, multi_output=False)
+        # Fit weighted lasso with user input
+        super(DebiasedLasso, self).fit(X, y, sample_weight, check_input)
+        # Center X, y
+        X, y, X_offset, y_offset, X_scale = self._preprocess_data(
+            X, y, fit_intercept=self.fit_intercept, normalize=False,
+            copy=self.copy_X, check_input=check_input)
+
+        # Calculate quantities that will be used later on. Account for centered data
+        y_pred = self.predict(X) - self.intercept_
+        self._theta_hat = self._get_theta_hat(X, sample_weight)
+        self._X_offset = X_offset
+
+        # Calculate coefficient and error variance
+        num_nonzero_coefs = np.sum(self.coef_ != 0)
+        self._error_variance = np.average((y - y_pred)**2, weights=sample_weight) / \
+            (1 - num_nonzero_coefs / X.shape[0])
+        self._mean_error_variance = self._error_variance / X.shape[0]
+        self._coef_variance = self._get_unscaled_coef_var(X, self._theta_hat, sample_weight) * self._error_variance
+
+        # Add coefficient correction
+        coef_correction = self._get_coef_correction(X, y, y_pred, sample_weight, self._theta_hat)
+        self.coef_ += coef_correction
+
+        # Set coefficients and intercept standard errors
+        self.coef_std_err_ = np.sqrt(np.diag(self._coef_variance))
+        if self.fit_intercept:
+            self.intercept_std_err_ = np.sqrt(
+                np.matmul(np.matmul(self._X_offset, self._coef_variance), self._X_offset) +
+                self._mean_error_variance
+            )
+        else:
+            self.intercept_std_err_ = 0
+
+        # Set intercept
+        self._set_intercept(X_offset, y_offset, X_scale)
+        # Return alpha to 'auto' state
+        if self.selected_alpha is not None:
+            self.alpha = 'auto'
+        return self
+
+    def predict_interval(self, X, lower=5, upper=95):
+        """Build prediction confidence intervals using the debiased lasso.
+
+        Parameters
+        ----------
+        X : ndarray or scipy.sparse matrix, (n_samples, n_features)
+            Samples.
+
+        lower : float, optional
+            Lower percentile. Must be a number between 0 and 100.
+            Defaults to 5.0.
+
+        upper : float, optional
+            Upper percentile. Must be a number between 0 and 100, larger than 'lower'.
+            Defaults to 95.0.
+
+        Returns
+        -------
+        (y_lower, y_upper) : tuple of arrays, shape (n_samples, ) 
+            Returns lower and upper interval endpoints.
+        """
+        y_pred = self.predict(X)
+        y_lower = np.empty(y_pred.shape)
+        y_upper = np.empty(y_pred.shape)
+        # Note that in the case of no intercept, X_offset is 0
+        X = X - self._X_offset
+        # Calculate the variance of the predictions
+        var_pred = np.sum(np.matmul(X, self._coef_variance) * X, axis=1)
+        if self.fit_intercept:
+            var_pred += self._mean_error_variance
+
+        # Calculate prediction confidence intervals
+        sd_pred = np.sqrt(var_pred)
+        y_lower = y_pred + np.apply_along_axis(lambda s: norm.ppf(lower / 100, scale=s), 0, sd_pred)
+        y_upper = y_pred + np.apply_along_axis(lambda s: norm.ppf(upper / 100, scale=s), 0, sd_pred)
+        return y_lower, y_upper
+
+    def _get_coef_correction(self, X, y, y_pred, sample_weight, theta_hat):
+        # Assumes flattened y
+        n_samples, n_features = X.shape
+        y_res = np.ndarray.flatten(y) - y_pred
+        # Compute weighted residuals
+        if sample_weight is not None:
+            y_res_scaled = y_res * sample_weight / np.sum(sample_weight)
+        else:
+            y_res_scaled = y_res / n_samples
+        delta_coef = np.matmul(
+            np.matmul(theta_hat, X.T), y_res_scaled)
+        return delta_coef
+
+    def _get_optimal_alpha(self, alpha_grid, X, y, sample_weight):
+        # To be done once per target. Assumes y can be flattened.
+        est = WeightedLasso().set_params(**self.get_params())
+        cv_estimator = GridSearchCV(est, param_grid={"alpha": alpha_grid}, cv=5)
+        cv_estimator.fit(X, y.flatten(), sample_weight=sample_weight)
+        return cv_estimator.best_params_["alpha"]
+
+    def _get_theta_hat(self, X, sample_weight):
+        # Assumes that X has already been offset
+        n_samples, n_features = X.shape
+        coefs = np.empty((n_features, n_features - 1))
+        tausq = np.empty(n_features)
+        # Compute Lasso coefficients for the columns of the design matrix
+        for i in range(n_features):
+            y = X[:, i]
+            X_reduced = X[:, list(range(i)) + list(range(i + 1, n_features))]
+            # Call weighted lasso on reduced design matrix
+            # Inherit some parameters from the parent
+            local_wlasso = WeightedLasso(
+                alpha=self.alpha,
+                fit_intercept=False,
+                max_iter=self.max_iter,
+                tol=self.tol
+            ).fit(X_reduced, y, sample_weight=sample_weight)
+            coefs[i] = local_wlasso.coef_
+            # Weighted tau
+            if sample_weight is not None:
+                y_weighted = y * sample_weight / np.sum(sample_weight)
+            else:
+                y_weighted = y / n_samples
+            tausq[i] = np.dot(y - local_wlasso.predict(X_reduced), y_weighted)
+        # Compute C_hat
+        C_hat = np.diag(np.ones(n_features))
+        C_hat[0][1:] = - coefs[0]
+        for i in range(1, n_features):
+            C_hat[i][:i] = - coefs[i][:i]
+            C_hat[i][i + 1:] = - coefs[i][i:]
+        # Compute theta_hat
+        theta_hat = np.matmul(np.diag(1 / tausq), C_hat)
+        return theta_hat
+
+    def _get_unscaled_coef_var(self, X, theta_hat, sample_weight):
+        if sample_weight is not None:
+            weights_mat = np.diag(sample_weight / np.sum(sample_weight))
+            sigma = np.matmul(X.T, np.matmul(weights_mat, X))
+        else:
+            sigma = np.matmul(X.T, X) / X.shape[0]
+        _unscaled_coef_var = np.matmul(np.matmul(theta_hat, sigma), theta_hat.T) / X.shape[0]
+        return _unscaled_coef_var
