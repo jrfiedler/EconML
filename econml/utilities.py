@@ -744,7 +744,12 @@ class WeightedLasso(Lasso):
                             sample_weight.shape[0], X.shape[0])
                     )
 
-            # Normalize inputs and fit weighted lasso
+            # Normalize inputs
+            X, y, X_offset, y_offset, X_scale = self._preprocess_data(
+                X, y, fit_intercept=self.fit_intercept, normalize=self.normalize,
+                copy=self.copy_X, check_input=check_input, sample_weight=sample_weight,
+                return_mean=True)
+
             normalized_weights = X.shape[0] * sample_weight / np.sum(sample_weight)
             sqrt_weights = np.sqrt(normalized_weights)
             weight_mat = np.diag(sqrt_weights)
@@ -755,10 +760,6 @@ class WeightedLasso(Lasso):
 
             # The intercept is not calculated properly due the sqrt(weights) factor
             # so it must be recomputed
-            _, _, X_offset, y_offset, X_scale = self._preprocess_data(
-                X, y, fit_intercept=self.fit_intercept, normalize=self.normalize,
-                copy=self.copy_X, sample_weight=sample_weight,
-                return_mean=True)
             self._set_intercept(X_offset, y_offset, X_scale)
         else:
             # Fit lasso without weights
@@ -898,7 +899,7 @@ class DebiasedLasso(WeightedLasso):
         # Center X, y
         X, y, X_offset, y_offset, X_scale = self._preprocess_data(
             X, y, fit_intercept=self.fit_intercept, normalize=False,
-            copy=self.copy_X, check_input=check_input)
+            copy=self.copy_X, check_input=check_input, sample_weight=sample_weight, return_mean=True)
 
         # Calculate quantities that will be used later on. Account for centered data
         y_pred = self.predict(X) - self.intercept_
