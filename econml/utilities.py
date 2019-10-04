@@ -704,7 +704,88 @@ class MultiModelWrapper(object):
 
 
 class WeightedLasso(Lasso):
-    """Version of sklearn Lasso that accepts weights."""
+    """Version of sklearn Lasso that accepts weights.
+
+    Parameters
+    ----------
+    alpha : float, optional
+        Constant that multiplies the L1 term. Defaults to 1.0.
+        ``alpha = 0`` is equivalent to an ordinary least square, solved
+        by the :class:`LinearRegression` object. For numerical
+        reasons, using ``alpha = 0`` with the ``Lasso`` object is not advised.
+        Given this, you should use the :class:`LinearRegression` object.
+
+    fit_intercept : boolean, optional, default True
+        Whether to calculate the intercept for this model. If set
+        to False, no intercept will be used in calculations
+        (e.g. data is expected to be already centered).
+
+    precompute : True | False | array-like, default=False
+        Whether to use a precomputed Gram matrix to speed up
+        calculations. If set to ``'auto'`` let us decide. The Gram
+        matrix can also be passed as argument. For sparse input
+        this option is always ``True`` to preserve sparsity.
+
+    copy_X : boolean, optional, default True
+        If ``True``, X will be copied; else, it may be overwritten.
+
+    max_iter : int, optional
+        The maximum number of iterations
+
+    tol : float, optional
+        The tolerance for the optimization: if the updates are
+        smaller than ``tol``, the optimization code checks the
+        dual gap for optimality and continues until it is smaller
+        than ``tol``.
+
+    warm_start : bool, optional
+        When set to True, reuse the solution of the previous call to fit as
+        initialization, otherwise, just erase the previous solution.
+        See :term:`the Glossary <warm_start>`.
+
+    positive : bool, optional
+        When set to ``True``, forces the coefficients to be positive.
+
+    random_state : int, RandomState instance or None, optional, default None
+        The seed of the pseudo random number generator that selects a random
+        feature to update.  If int, random_state is the seed used by the random
+        number generator; If RandomState instance, random_state is the random
+        number generator; If None, the random number generator is the
+        RandomState instance used by `np.random`. Used when ``selection`` ==
+        'random'.
+
+    selection : str, default 'cyclic'
+        If set to 'random', a random coefficient is updated every iteration
+        rather than looping over features sequentially by default. This
+        (setting to 'random') often leads to significantly faster convergence
+        especially when tol is higher than 1e-4.
+
+    Attributes
+    ----------
+    coef_ : array, shape (n_features,) | (n_targets, n_features)
+        parameter vector (w in the cost function formula)
+
+    sparse_coef_ : scipy.sparse matrix, shape (n_features, 1) | (n_targets, n_features)
+        ``sparse_coef_`` is a readonly property derived from ``coef_``
+
+    intercept_ : float | array, shape (n_targets,)
+        independent term in decision function.
+
+    n_iter_ : int | array-like, shape (n_targets,)
+        number of iterations run by the coordinate descent solver to reach
+        the specified tolerance.
+    """
+
+    def __init__(self, alpha=1.0, fit_intercept=True,
+                 precompute=False, copy_X=True, max_iter=1000,
+                 tol=1e-4, warm_start=False, positive=False,
+                 random_state=None, selection='cyclic'):
+        super(WeightedLasso, self).__init__(
+            alpha=alpha, fit_intercept=fit_intercept,
+            normalize=False, precompute=precompute, copy_X=copy_X,
+            max_iter=max_iter, tol=tol, warm_start=warm_start,
+            positive=positive, random_state=random_state,
+            selection=selection)
 
     def fit(self, X, y, sample_weight=None, check_input=True):
         """Fit model with coordinate descent.
@@ -725,7 +806,6 @@ class WeightedLasso(Lasso):
             Allow to bypass several input checking.
             Don't use this parameter unless you know what you do.
         """
-
         # Convert X, y into numpy arrays
         X, y = check_X_y(X, y, y_numeric=True, multi_output=True)
 
@@ -746,21 +826,27 @@ class WeightedLasso(Lasso):
 
             # Normalize inputs
             X, y, X_offset, y_offset, X_scale = self._preprocess_data(
-                X, y, fit_intercept=self.fit_intercept, normalize=self.normalize,
+                X, y, fit_intercept=self.fit_intercept, normalize=False,
                 copy=self.copy_X, check_input=check_input, sample_weight=sample_weight,
                 return_mean=True)
-
+            # Weight inputs
             normalized_weights = X.shape[0] * sample_weight / np.sum(sample_weight)
             sqrt_weights = np.sqrt(normalized_weights)
             weight_mat = np.diag(sqrt_weights)
             X_weighted = np.matmul(weight_mat, X)
             y_weighted = np.matmul(weight_mat, y)
-            # Fit Lasso
-            super(WeightedLasso, self).fit(X_weighted, y_weighted, check_input=check_input)
-
-            # The intercept is not calculated properly due the sqrt(weights) factor
-            # so it must be recomputed
-            self._set_intercept(X_offset, y_offset, X_scale)
+            if self.fit_intercept:
+                # Fit base class without intercept
+                self.fit_intercept = False
+                # Fit Lasso
+                super(WeightedLasso, self).fit(X_weighted, y_weighted, check_input=check_input)
+                # Reset intercept
+                self.fit_intercept = True
+                # The intercept is not calculated properly due the sqrt(weights) factor
+                # so it must be recomputed
+                self._set_intercept(X_offset, y_offset, X_scale)
+            else:
+                super(WeightedLasso, self).fit(X_weighted, y_weighted, check_input=check_input)
         else:
             # Fit lasso without weights
             super(WeightedLasso, self).fit(X, y, check_input=check_input)
@@ -772,7 +858,7 @@ class DebiasedLasso(WeightedLasso):
 
     Implementation was derived from <https://arxiv.org/abs/1303.0518>.
 
-    Only implemented for single-dimensional output. 
+    Only implemented for single-dimensional output.
 
     Parameters
     ----------
@@ -952,7 +1038,7 @@ class DebiasedLasso(WeightedLasso):
 
         Returns
         -------
-        (y_lower, y_upper) : tuple of arrays, shape (n_samples, ) 
+        (y_lower, y_upper) : tuple of arrays, shape (n_samples, )
             Returns lower and upper interval endpoints.
         """
         y_pred = self.predict(X)
@@ -986,7 +1072,7 @@ class DebiasedLasso(WeightedLasso):
 
     def _get_optimal_alpha(self, alpha_grid, X, y, sample_weight):
         # To be done once per target. Assumes y can be flattened.
-        est = WeightedLasso().set_params(**self.get_params())
+        est = WeightedLasso(set_intercept=False)
         cv_estimator = GridSearchCV(est, param_grid={"alpha": alpha_grid}, cv=5)
         cv_estimator.fit(X, y.flatten(), sample_weight=sample_weight)
         return cv_estimator.best_params_["alpha"]
